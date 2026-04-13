@@ -116,9 +116,10 @@ def validate_qa_context(
     nonempty = sum(1 for _, a in qa_pairs if len((a or "").strip()) >= min_answer_len)
     ratio = nonempty / max(len(qa_pairs), 1)
     if ratio < min_fill_ratio:
+        required_answers = max(1, int(len(qa_pairs) * min_fill_ratio + 0.999))
         errs.append(
-            f"Too many empty or very short answers (need ≥{min_fill_ratio:.0%} with "
-            f"≥{min_answer_len} chars; got {ratio:.0%})."
+            f"Please answer at least {required_answers} question(s) with {min_answer_len}+ characters "
+            f"before generating docs (currently {nonempty}/{len(qa_pairs)} answered)."
         )
         return False, errs
     return True, []
@@ -130,7 +131,8 @@ def validate_project_brief(brief: dict[str, Any]) -> tuple[bool, list[str]]:
     for k in required:
         v = brief.get(k)
         if v is None or (isinstance(v, str) and not str(v).strip()) or (isinstance(v, list) and len(v) == 0):
-            errs.append(f"Missing or empty: {k}")
+            label = k.replace("_", " ")
+            errs.append(f"Please provide a valid `{label}` in the project brief.")
     return (len(errs) == 0, errs)
 
 
@@ -140,44 +142,44 @@ def validate_prd(prd: dict[str, Any]) -> tuple[bool, list[str]]:
     for k in legacy:
         v = prd.get(k)
         if v is None:
-            errs.append(f"Missing PRD key: {k}")
+            errs.append(f"PRD is missing `{k.replace('_', ' ')}`.")
         elif isinstance(v, list) and len(v) == 0:
-            errs.append(f"Empty list: {k}")
+            errs.append(f"PRD section `{k.replace('_', ' ')}` should not be empty.")
         elif isinstance(v, str) and not v.strip():
-            errs.append(f"Empty string: {k}")
+            errs.append(f"PRD section `{k.replace('_', ' ')}` is blank.")
 
     mvp = prd.get("mvp_scope")
     if not isinstance(mvp, dict):
-        errs.append("Missing or invalid mvp_scope object")
+        errs.append("PRD is missing a valid MVP scope section.")
     else:
         if not (mvp.get("must_have_features") or []):
-            errs.append("mvp_scope.must_have_features must be non-empty")
+            errs.append("MVP scope should include at least one must-have feature.")
         if not (mvp.get("explicitly_deferred") or []):
-            errs.append("mvp_scope.explicitly_deferred should list deferred items")
+            errs.append("MVP scope should list at least one deferred feature.")
 
     phases = prd.get("phased_roadmap")
     if not isinstance(phases, dict):
-        errs.append("Missing or invalid phased_roadmap")
+        errs.append("PRD is missing a valid phased roadmap section.")
     else:
         if not (phases.get("phase_2_growth") or []):
-            errs.append("phased_roadmap.phase_2_growth should be non-empty")
+            errs.append("Roadmap should include at least one Phase 2 growth item.")
         if not (phases.get("phase_3_advanced") or []):
-            errs.append("phased_roadmap.phase_3_advanced should be non-empty")
+            errs.append("Roadmap should include at least one Phase 3 advanced item.")
 
     risks = prd.get("risks_and_tradeoffs")
     if not isinstance(risks, dict):
-        errs.append("Missing or invalid risks_and_tradeoffs")
+        errs.append("PRD is missing the risks and tradeoffs section.")
     else:
         for rk in ("key_product_risks", "technical_risks", "gtm_risks"):
             if not (risks.get(rk) or []):
-                errs.append(f"risks_and_tradeoffs.{rk} should be non-empty")
+                errs.append(f"Please add entries under `{rk.replace('_', ' ')}`.")
         pt = risks.get("product_tradeoffs") or []
         if not isinstance(pt, list) or len(pt) < 2:
-            errs.append("risks_and_tradeoffs.product_tradeoffs must have at least 2 items")
+            errs.append("Please include at least 2 product tradeoffs.")
 
     dl = prd.get("decision_log") or []
     if not isinstance(dl, list) or len(dl) < 2:
-        errs.append("decision_log must have at least 2 entries")
+        errs.append("Decision log should include at least 2 entries.")
 
     return (len(errs) == 0, errs)
 
@@ -185,14 +187,14 @@ def validate_prd(prd: dict[str, Any]) -> tuple[bool, list[str]]:
 def validate_architecture(arch: dict[str, Any]) -> tuple[bool, list[str]]:
     errs: list[str] = []
     if arch.get("error"):
-        errs.append("architecture agent returned error shape")
+        errs.append("Architecture output could not be parsed.")
         return False, errs
     if not (arch.get("services") or []):
-        errs.append("architecture.services must be non-empty")
+        errs.append("Architecture should list at least one service.")
     if not isinstance(arch.get("suggested_stack"), dict):
-        errs.append("architecture.suggested_stack must be an object")
+        errs.append("Architecture should include a suggested tech stack.")
     if not (arch.get("data_flow_textual") or "").strip():
-        errs.append("architecture.data_flow_textual must be non-empty")
+        errs.append("Architecture should include a textual data flow description.")
     return (len(errs) == 0, errs)
 
 

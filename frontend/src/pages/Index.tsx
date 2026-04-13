@@ -21,9 +21,17 @@ async function parseError(res: Response): Promise<string> {
   try {
     const data = await res.json();
     if (data.detail) {
-      return typeof data.detail === "string"
-        ? data.detail
-        : JSON.stringify(data.detail);
+      if (typeof data.detail === "string") return data.detail;
+      if (typeof data.detail === "object" && data.detail !== null) {
+        const detail = data.detail as Record<string, unknown>;
+        const stage = typeof detail.stage === "string" ? `${detail.stage}: ` : "";
+        const message =
+          (typeof detail.message === "string" && detail.message) ||
+          (typeof detail.detail === "string" && detail.detail) ||
+          (typeof detail.error === "string" && detail.error);
+        if (message) return `${stage}${message}`;
+      }
+      return "Request failed. Please try again.";
     }
   } catch {
     /* ignore */
@@ -317,11 +325,19 @@ export default function Index() {
       if (!res.ok) throw new Error(await parseError(res));
       const data = await res.json();
       if (data.error) {
-        const extra =
-          Array.isArray(data.validation_errors) && data.validation_errors.length
-            ? ` ${data.validation_errors.join("; ")}`
-            : "";
-        setError(String(data.error) + extra);
+        const base = String(data.error).trim();
+        const details = Array.isArray(data.validation_errors)
+          ? Array.from(
+              new Set(
+                data.validation_errors
+                  .map((item: unknown) => String(item ?? "").trim())
+                  .filter(Boolean)
+                  .filter((msg: string) => msg !== base),
+              ),
+            )
+          : [];
+        const message = details.length ? `${base} ${details.join("; ")}` : base;
+        setError(message);
         setTraceRunning(null);
         return;
       }

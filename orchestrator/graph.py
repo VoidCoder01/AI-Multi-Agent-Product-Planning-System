@@ -26,6 +26,17 @@ if TYPE_CHECKING:
 def compile_planning_graph(orch: Orchestrator):
     """Build compiled LangGraph with validation gates and halt on failure."""
 
+    def _unique_errors(errs: list[str]) -> list[str]:
+        seen: set[str] = set()
+        out: list[str] = []
+        for err in errs:
+            msg = str(err).strip()
+            if not msg or msg in seen:
+                continue
+            seen.add(msg)
+            out.append(msg)
+        return out
+
     def node_clarify(state: PlanningState) -> dict:
         idea = state["product_idea"]
         ua = state.get("user_answers") or {}
@@ -47,9 +58,10 @@ def compile_planning_graph(orch: Orchestrator):
     def node_validate_qa(state: PlanningState) -> dict:
         ok, errs = validate_qa_context(state.get("qa_pairs") or [])
         if not ok:
+            clean = _unique_errors(errs)
             return {
-                "halt_reason": "qa_validation: " + "; ".join(errs),
-                "validation_errors": errs,
+                "halt_reason": clean[0] if clean else "Please add a bit more context before generating docs.",
+                "validation_errors": clean,
             }
         return {"halt_reason": None, "validation_errors": []}
 
@@ -63,16 +75,17 @@ def compile_planning_graph(orch: Orchestrator):
     def node_validate_brief(state: PlanningState) -> dict:
         brief = state.get("project_brief") or {}
         if brief.get("error"):
-            msg = "requirement_agent returned unparsed output"
+            msg = "We couldn't generate a valid project brief from the current inputs. Please refine your answers and try again."
             return {
-                "halt_reason": "brief_validation: " + msg,
+                "halt_reason": msg,
                 "validation_errors": [msg],
             }
         ok, errs = validate_project_brief(brief)
         if not ok:
+            clean = _unique_errors(errs)
             return {
-                "halt_reason": "brief_validation: " + "; ".join(errs),
-                "validation_errors": errs,
+                "halt_reason": "The generated project brief is incomplete. Please try again.",
+                "validation_errors": clean,
             }
         return {"halt_reason": None, "validation_errors": []}
 
@@ -90,16 +103,17 @@ def compile_planning_graph(orch: Orchestrator):
     def node_validate_prd(state: PlanningState) -> dict:
         prd = state.get("prd") or {}
         if prd.get("error"):
-            msg = "pm_agent returned unparsed output"
+            msg = "We couldn't generate a valid PRD right now. Please try again in a moment."
             return {
-                "halt_reason": "prd_validation: " + msg,
+                "halt_reason": msg,
                 "validation_errors": [msg],
             }
         ok, errs = validate_prd(prd)
         if not ok:
+            clean = _unique_errors(errs)
             return {
-                "halt_reason": "prd_validation: " + "; ".join(errs),
-                "validation_errors": errs,
+                "halt_reason": "The generated PRD is missing required sections. Please retry generation.",
+                "validation_errors": clean,
             }
         return {"halt_reason": None, "validation_errors": []}
 
@@ -113,16 +127,17 @@ def compile_planning_graph(orch: Orchestrator):
     def node_validate_architecture(state: PlanningState) -> dict:
         arch = state.get("architecture") or {}
         if arch.get("error"):
-            msg = "architect_agent returned unparsed output"
+            msg = "We couldn't generate a valid architecture draft. Please try again."
             return {
-                "halt_reason": "architecture_validation: " + msg,
+                "halt_reason": msg,
                 "validation_errors": [msg],
             }
         ok, errs = validate_architecture(arch)
         if not ok:
+            clean = _unique_errors(errs)
             return {
-                "halt_reason": "architecture_validation: " + "; ".join(errs),
-                "validation_errors": errs,
+                "halt_reason": "The architecture draft is incomplete. Please retry generation.",
+                "validation_errors": clean,
             }
         return {"halt_reason": None, "validation_errors": []}
 
