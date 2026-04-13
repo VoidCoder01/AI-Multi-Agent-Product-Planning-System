@@ -4,7 +4,9 @@ __pycache__/
 .venv/
 venv/
 backend/output/
-logs/
-data/planning_memory/
+logs/*.jsonl
+data/planning_memory/*.json
+!logs/.gitkeep
+!data/planning_memory/.gitkeep
 frontend/node_modules/
 frontend/dist/

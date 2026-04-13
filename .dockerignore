@@ -17,7 +17,6 @@ frontend/dist
 **/node_modules
 **/dist
 data/planning_memory/*.json
-legacy_agents
 frontend/.vite
 Dockerfile
 docker-compose.yml

@@ -2,7 +2,7 @@
 
 import pytest
 
-from backend.agents.task_agent import renumber_task_ids_globally
+from agents.task_agent import renumber_task_ids_globally
 
 
 def test_renumber_makes_all_task_ids_unique():
