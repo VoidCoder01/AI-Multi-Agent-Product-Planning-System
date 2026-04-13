@@ -1,23 +1,13 @@
-# Frontend
+# Frontend (Vite + React)
 
-The only UI for this project lives in **`project-code/`** (Vite + React + TypeScript).
+**Project docs:** [../README.md](../README.md) (architecture, setup, API).
 
-**Option A — from `frontend/` (delegates to `project-code/`):**
-
-```bash
-cd frontend
-npm install          # installs deps inside project-code/
-npm run dev          # http://localhost:8080/ui/
-npm run build
-```
-
-**Option B — from `project-code/` directly:**
+## Commands
 
 ```bash
-cd frontend/project-code
 npm install
-npm run dev
-npm run build        # → dist/ served by FastAPI at /ui/
+npm run dev    # http://localhost:8080/ui/ — proxies /api → FastAPI :8000
+npm run build  # dist/ served by FastAPI at http://127.0.0.1:8000/ui/
 ```
 
-See the repository root `README.md` for full stack setup.
+`base` is `/ui` to match the FastAPI static mount.

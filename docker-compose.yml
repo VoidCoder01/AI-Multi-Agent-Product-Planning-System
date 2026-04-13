@@ -1,0 +1,21 @@
+# API + UI in one container: http://127.0.0.1:8000/ui/
+#
+#   cp .env.example .env   # add ANTHROPIC_API_KEY
+#   docker compose up --build
+#
+# Same optional env vars as .env.example (model, retries, workers) apply.
+
+services:
+  app:
+    build: .
+    image: ai-multi-agent-planning:latest
+    ports:
+      - "8000:8000"
+    env_file: .env
+    volumes:
+      - planning_memory:/app/data/planning_memory
+      - app_logs:/app/logs
+
+volumes:
+  planning_memory:
+  app_logs:

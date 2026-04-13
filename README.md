@@ -41,9 +41,9 @@ Multi-agent orchestration (BMAD-style): a user provides a product idea, the syst
 | Assignment expectation | This repo |
 |----------------------|-----------|
 | `backend/` | `backend/` — FastAPI, orchestrator entrypoint, tests, requirements |
-| `agents/` | `agents/` — agent implementations; `prompt_loader.py` + `backend/prompts/` for prompts |
+| `agents/` | `agents/` — agent implementations; `backend/prompt_loader.py` + `backend/prompts/` for prompts |
 | `docs/` | `docs/` — generated `*.md` (see `docs/OUTPUTS.md`) |
-| `frontend/` | `frontend/project-code/` — Vite + React + TypeScript (see `frontend/project-code/README.md`) |
+| `frontend/` | `frontend/` — Vite + React + TypeScript (see `frontend/README.md`) |
 
 **Top-level layout (single entry README: this file):**
 
@@ -53,9 +53,9 @@ Multi-agent orchestration (BMAD-style): a user provides a product idea, the syst
 ├── agents/                   # agent implementations (LangGraph calls these)
 ├── backend/                  # FastAPI, tests, requirements, prompts/*.md
 ├── docs/                     # generated artifacts (+ docs/OUTPUTS.md)
-├── frontend/project-code/    # React UI
+├── frontend/                 # React UI (Vite)
 ├── orchestrator/             # LangGraph graph
-├── prompt_loader.py          # prompt registry + templates
+├── backend/prompt_loader.py  # prompt registry + templates
 ├── schemas/                  # PlanningState, validation
 └── utils/                    # logging, memory
 ```
@@ -79,7 +79,7 @@ Separation is enforced by **different system prompts** and **single-purpose meth
 ## Prompt design
 
 - Prompts live as versioned Markdown under **`backend/prompts/`** (YAML frontmatter: name, version, temperature, max_tokens). Shared text is injected via `{{shared_constraints}}`.
-- **`prompt_loader.py`** loads files, renders `{{variables}}` (fail-closed if any remain), and validates an OUTPUT FORMAT section before the LLM call. **`agents/prompt_config.py`** maps logical agents to prompt paths.
+- **`backend/prompt_loader.py`** loads files, renders `{{variables}}` (fail-closed if any remain), and validates an OUTPUT FORMAT section before the LLM call. **`agents/prompt_config.py`** maps logical agents to prompt paths.
 - User content is passed in the **user** message (idea, Q&A, prior JSON) where needed.
 - **Parsing:** `agents/json_utils.py` strips optional ` ```json ` fences and recovers JSON if the model adds extra text.
 
@@ -149,12 +149,12 @@ chmod +x run_server.sh   # once
 ./run_server.sh
 ```
 
-**Frontend (React + Vite)** — requires Node 18+. Use **`frontend/project-code` only** (not any other folder under `frontend/`).
+**Frontend (React + Vite)** — requires Node 18+. All UI code lives directly under **`frontend/`**.
 
 Development (hot reload; `/api` proxied to the backend on port 8000):
 
 ```bash
-cd frontend/project-code
+cd frontend
 npm install
 npm run dev
 ```
@@ -164,14 +164,44 @@ Open **http://127.0.0.1:8080/ui/** (Vite is configured with `base: /ui/`).
 Production build (served by FastAPI at `/ui/`):
 
 ```bash
-cd frontend/project-code
+cd frontend
 npm install
 npm run build
 ```
 
-Then open **http://127.0.0.1:8000/ui/** with the API running (static files from `frontend/project-code/dist/`).
+Then open **http://127.0.0.1:8000/ui/** with the API running (static files from `frontend/dist/`).
 
 - **Swagger:** http://127.0.0.1:8000/docs  
+
+### Docker (API + UI in one command)
+
+The repo includes a multi-stage image: build the Vite frontend, then run FastAPI with static files under `/ui`.
+
+1. Copy and edit environment (Compose expects a `.env` file next to `docker-compose.yml`):
+
+   ```bash
+   cp .env.example .env
+   # Set ANTHROPIC_API_KEY and any optional model / retry settings
+   ```
+
+2. Build and run:
+
+   ```bash
+   docker compose up --build
+   ```
+
+3. Open **http://127.0.0.1:8000/ui/** (API docs: **http://127.0.0.1:8000/docs**).
+
+Volumes `planning_memory` and `app_logs` map to `/app/data/planning_memory` and `/app/logs` so planning artifacts and logs survive container restarts.
+
+For hot-reload development of both services in one command:
+
+```bash
+docker compose -f docker-compose.dev.yml up --build
+```
+
+- Frontend dev server: **http://127.0.0.1:8080/ui/**
+- Backend API/docs: **http://127.0.0.1:8000/docs**
 
 ---
 
