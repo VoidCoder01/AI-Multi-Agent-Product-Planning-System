@@ -4,6 +4,8 @@ FastAPI entry: orchestrator, /api/questions, /api/generate, static UI at /ui.
 
 from __future__ import annotations
 
+import asyncio
+import json
 import logging
 import os
 import sys
@@ -12,7 +14,7 @@ from pathlib import Path
 from dotenv import load_dotenv
 from fastapi import FastAPI, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import JSONResponse
+from fastapi.responses import JSONResponse, StreamingResponse
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel
 
@@ -135,6 +137,52 @@ def generate_documentation(request: GenerateBody):
                 "stage": "workflow_generation",
             },
         ) from e
+
+
+@app.post("/api/generate/stream")
+async def generate_stream(request: GenerateBody):
+    """Stream workflow progress as server-sent events."""
+
+    async def event_stream():
+        stages = [
+            ("clarification", "Analyzing product idea..."),
+            ("requirement", "Generating project brief..."),
+            ("pm_review", "PM reviewing brief..."),
+            ("prd", "Writing PRD..."),
+            ("architect", "Designing architecture..."),
+            ("scrum_review", "Scrum reviewing PRD..."),
+            ("epics", "Creating epics and stories..."),
+            ("feasibility", "Validating feasibility..."),
+            ("tasks", "Breaking down tasks..."),
+            ("validation", "Final validation..."),
+        ]
+        for stage_name, message in stages:
+            payload = {"stage": stage_name, "status": "started", "message": message}
+            yield f"data: {json.dumps(payload)}\n\n"
+
+        try:
+            result = await asyncio.to_thread(
+                get_orchestrator().run_workflow,
+                request.product_idea,
+                request.answers,
+                questions=request.questions,
+            )
+            yield f"data: {json.dumps({'stage': 'complete', 'status': 'done', 'result': result})}\n\n"
+        except Exception as exc:
+            payload = {
+                "stage": "error",
+                "status": "failed",
+                "error": {"type": type(exc).__name__, "message": str(exc)},
+            }
+            yield f"data: {json.dumps(payload)}\n\n"
+
+    return StreamingResponse(event_stream(), media_type="text/event-stream")
+
+
+@app.get("/api/workflow/diagram")
+def workflow_diagram():
+    """Return a Mermaid diagram for the current workflow graph."""
+    return {"mermaid": get_orchestrator().mermaid_diagram()}
 
 
 @app.get("/api/sessions/{session_id}")
