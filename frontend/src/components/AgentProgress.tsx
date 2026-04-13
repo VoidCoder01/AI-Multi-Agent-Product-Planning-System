@@ -90,8 +90,12 @@ export function AgentProgress({ onPhaseChange, paused = false }: AgentProgressPr
   }, [paused]);
 
   const currentPhase = PHASES[currentPhaseIndex];
-  const progressPercentage = ((currentPhaseIndex + 1) / PHASES.length) * 100;
-  const remainingPhases = Math.max(0, PHASES.length - currentPhaseIndex - 1);
+  // Keep visual progress below 100% while the final agent is still running.
+  const progressPercentage = Math.min(
+    ((currentPhaseIndex + 1) / PHASES.length) * 100,
+    95,
+  );
+  const remainingPhases = Math.max(1, PHASES.length - currentPhaseIndex - 1);
   const estimatedSeconds = remainingPhases * (PHASE_MS / 1000);
 
   return (

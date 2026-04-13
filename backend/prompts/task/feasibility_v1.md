@@ -17,6 +17,19 @@ Return structured feasibility assessment only.
 
 The user message is JSON with epics, prd, architecture.
 
+# CROSS-DOCUMENT VALIDATION RULES (MUST CHECK)
+
+Before returning output, explicitly validate:
+1. Tech stack consistency between architecture and implementation stories/tasks (e.g., React Query vs Redux).
+2. Every MVP feature in brief/PRD has at least one epic/story path.
+3. Deferred features in PRD are not presented as current MVP scope in brief/epics.
+4. Numeric targets are not contradictory across brief/PRD/epic success criteria.
+5. Timeline statements are coherent (build timeline vs implementation/onboarding timeline).
+6. Every critical NFR (uptime, security, compliance) has architectural backing.
+7. Epic success criteria metrics are clearly tied to PRD metric definitions.
+
+When a mismatch is found, include a concrete item in `overscoped_or_risky_items` and a specific correction in `recommendations`.
+
 # CONSTRAINTS
 
 {{shared_constraints}}

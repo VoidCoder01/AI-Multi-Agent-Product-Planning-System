@@ -133,7 +133,7 @@ export default function Index() {
     if (step === 2 && loading) return Math.min(95, 38 + generatePhase * 11);
     if (step === 2) return 42;
     if (step === 1 && loading) return 22;
-    return 14;
+    return 0;
   }, [step, loading, generatePhase]);
 
   const completedAgents = useMemo(

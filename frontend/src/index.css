@@ -384,21 +384,23 @@
 }
 
 .time-estimate {
-  text-align: center;
+  text-align: left;
   margin-top: 1.5rem;
-  padding: 0.8rem;
+  padding: 0.8rem 0.25rem 0;
   color: rgba(255, 255, 255, 0.55);
   font-size: 0.82rem;
   display: flex;
-  align-items: center;
-  justify-content: center;
+  align-items: flex-start;
+  justify-content: flex-start;
   gap: 0.5rem;
   line-height: 1.4;
+  width: 100%;
 }
 
 .time-icon {
   font-size: 1.2rem;
   flex-shrink: 0;
+  margin-top: 0.05rem;
 }
 
 @keyframes agent-progress-bounce {
@@ -503,8 +505,10 @@
   }
 
   .time-estimate {
-    flex-direction: column;
-    text-align: center;
+    flex-direction: row;
+    justify-content: flex-start;
+    align-items: flex-start;
+    text-align: left;
   }
 }
 

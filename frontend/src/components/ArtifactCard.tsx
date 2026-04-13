@@ -1,6 +1,6 @@
 import { useState } from "react";
 import { motion } from "framer-motion";
-import { Copy, Download, Eye, FileText, RefreshCw } from "lucide-react";
+import { Copy, Download, Eye, FileText } from "lucide-react";
 import { toast } from "sonner";
 import { cn } from "@/lib/utils";
 import { Button } from "@/components/ui/button";
@@ -42,12 +42,6 @@ export function ArtifactCard({ title, description, agentKey, content, index }: A
     toast.success("File exported");
   };
 
-  const regenerate = () => {
-    toast.message("Regenerate", {
-      description: "Connects to a future API to re-run this agent.",
-    });
-  };
-
   return (
     <>
       <motion.article
@@ -55,7 +49,7 @@ export function ArtifactCard({ title, description, agentKey, content, index }: A
         animate={{ opacity: 1, y: 0 }}
         transition={{ duration: 0.35, delay: index * 0.06, ease: [0.22, 1, 0.36, 1] }}
         className={cn(
-          "group relative flex flex-col rounded-2xl border border-white/[0.09] bg-card/40 p-5 shadow-sm backdrop-blur-xl transition-all duration-300 ease-out",
+          "group relative flex flex-col rounded-2xl border border-white/[0.09] bg-card/40 p-5 sm:p-6 shadow-sm backdrop-blur-xl transition-all duration-300 ease-out",
           "hover:-translate-y-1 hover:border-primary/22 hover:shadow-[0_10px_36px_-18px_rgba(0,0,0,0.55)]",
         )}
       >
@@ -65,8 +59,8 @@ export function ArtifactCard({ title, description, agentKey, content, index }: A
               <FileText className="h-5 w-5 text-primary" />
             </div>
             <div className="min-w-0">
-              <h3 className="text-[15px] font-semibold tracking-tight text-[#E5E7EB]">{title}</h3>
-              <p className="mt-1 line-clamp-2 text-[13px] leading-relaxed text-muted-foreground">{description}</p>
+              <h3 className="text-[17px] font-semibold tracking-tight text-[#E5E7EB]">{title}</h3>
+              <p className="mt-1.5 line-clamp-3 text-[14px] leading-relaxed text-muted-foreground/95">{description}</p>
             </div>
           </div>
         </div>
@@ -78,7 +72,7 @@ export function ArtifactCard({ title, description, agentKey, content, index }: A
             type="button"
             variant="secondary"
             size="sm"
-            className="h-8 text-[12px] transition-transform duration-200 hover:scale-[1.02]"
+            className="h-8 text-[13px] transition-transform duration-200 hover:scale-[1.02]"
             onClick={() => setOpen(true)}
           >
             <Eye className="h-3.5 w-3.5" />
@@ -86,19 +80,9 @@ export function ArtifactCard({ title, description, agentKey, content, index }: A
           </Button>
           <Button
             type="button"
-            variant="secondary"
-            size="sm"
-            className="h-8 text-[12px] transition-transform duration-200 hover:scale-[1.02]"
-            onClick={regenerate}
-          >
-            <RefreshCw className="h-3.5 w-3.5" />
-            Regenerate
-          </Button>
-          <Button
-            type="button"
             variant="ghost"
             size="sm"
-            className="h-8 text-[12px] text-muted-foreground hover:text-foreground"
+            className="h-8 text-[13px] text-muted-foreground hover:text-foreground"
             onClick={exportArtifact}
           >
             <Download className="h-3.5 w-3.5" />
@@ -110,10 +94,10 @@ export function ArtifactCard({ title, description, agentKey, content, index }: A
       <Dialog open={open} onOpenChange={setOpen}>
         <DialogContent className="max-h-[85vh] max-w-3xl overflow-hidden border-white/[0.1] bg-[hsl(222,28%,8%)] p-0 shadow-2xl">
           <DialogHeader className="border-b border-white/[0.08] px-6 py-4">
-            <DialogTitle className="text-left text-[15px] font-semibold text-[#E5E7EB]">{title}</DialogTitle>
+            <DialogTitle className="text-left text-[17px] font-semibold text-[#E5E7EB]">{title}</DialogTitle>
           </DialogHeader>
           <div className="max-h-[65vh] overflow-auto px-6 py-4">
-            <pre className="whitespace-pre-wrap break-words font-mono text-[12px] leading-relaxed text-muted-foreground">
+            <pre className="whitespace-pre-wrap break-words font-mono text-[13px] leading-relaxed text-muted-foreground">
               {content}
             </pre>
           </div>

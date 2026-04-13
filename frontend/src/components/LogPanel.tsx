@@ -1,8 +1,7 @@
 import { useMemo, useState } from "react";
-import { motion, AnimatePresence } from "framer-motion";
-import { ChevronDown, ChevronLeft, ChevronRight, Clock, PanelRight } from "lucide-react";
+import { motion } from "framer-motion";
+import { ChevronDown, Clock, PanelRight } from "lucide-react";
 import { cn } from "@/lib/utils";
-import { Button } from "@/components/ui/button";
 import { ScrollArea } from "@/components/ui/scroll-area";
 import { Collapsible, CollapsibleContent, CollapsibleTrigger } from "@/components/ui/collapsible";
 
@@ -49,13 +48,12 @@ function formatDuration(ms?: number) {
 }
 
 export function LogPanel({ entries, running, defaultOpen = true, className }: LogPanelProps) {
-  const [open, setOpen] = useState(defaultOpen);
   const sorted = useMemo(() => [...entries].sort((a, b) => b.at - a.at), [entries]);
 
   return (
     <motion.aside
       initial={false}
-      animate={{ width: open ? "100%" : 44 }}
+      animate={{ width: "100%" }}
       transition={{ duration: 0.3, ease: [0.22, 1, 0.36, 1] }}
       className={cn(
         "relative flex min-h-0 w-full shrink-0 flex-col overflow-hidden rounded-xl border border-white/[0.09] bg-card/35 shadow-[0_6px_28px_-10px_rgba(0,0,0,0.45)] backdrop-blur-xl",
@@ -63,53 +61,30 @@ export function LogPanel({ entries, running, defaultOpen = true, className }: Lo
       )}
     >
       <div className="flex items-center justify-between gap-2 border-b border-white/[0.06] px-3 py-2.5">
-        <div className={cn("flex min-w-0 flex-1 items-center gap-2", !open && "justify-center")}>
+        <div className="flex min-w-0 flex-1 items-center gap-2">
           <PanelRight className="h-4 w-4 shrink-0 text-primary" />
-          {open && (
-            <span className="truncate text-[13px] font-semibold tracking-tight text-[#E5E7EB]">
-              Execution trace
-            </span>
-          )}
+          <span className="truncate text-[13px] font-semibold tracking-tight text-[#E5E7EB]">
+            Execution trace
+          </span>
         </div>
-        <Button
-          type="button"
-          variant="ghost"
-          size="icon"
-          className="h-8 w-8 shrink-0 text-muted-foreground hover:text-foreground"
-          onClick={() => setOpen((o) => !o)}
-          aria-label={open ? "Collapse trace" : "Expand trace"}
-        >
-          {open ? <ChevronRight className="h-4 w-4" /> : <ChevronLeft className="h-4 w-4" />}
-        </Button>
       </div>
+      <div className="flex min-h-0 flex-1 flex-col">
+        <ScrollArea className="h-full px-2 py-2">
+          <div className="space-y-2 pr-2">
+            {running && <RunningRow running={running} />}
 
-      <AnimatePresence>
-        {open && (
-          <motion.div
-            initial={{ opacity: 0 }}
-            animate={{ opacity: 1 }}
-            exit={{ opacity: 0 }}
-            transition={{ duration: 0.2 }}
-            className="flex min-h-0 flex-1 flex-col"
-          >
-            <ScrollArea className="h-full px-2 py-2">
-              <div className="space-y-2 pr-2">
-                {running && <RunningRow running={running} />}
+            {sorted.map((entry) => (
+              <LogRow key={entry.id} entry={entry} />
+            ))}
 
-                {sorted.map((entry) => (
-                  <LogRow key={entry.id} entry={entry} />
-                ))}
-
-                {!running && sorted.length === 0 && (
-                  <p className="px-2 py-8 text-center text-[12px] text-muted-foreground/95">
-                    Trace updates appear as agents run.
-                  </p>
-                )}
-              </div>
-            </ScrollArea>
-          </motion.div>
-        )}
-      </AnimatePresence>
+            {!running && sorted.length === 0 && (
+              <p className="px-2 py-8 text-center text-[12px] text-muted-foreground/95">
+                Trace updates appear as agents run.
+              </p>
+            )}
+          </div>
+        </ScrollArea>
+      </div>
     </motion.aside>
   );
 }
@@ -127,7 +102,7 @@ function RunningRow({ running }: { running: TraceRunningState }) {
           </p>
           <p className="mt-1 text-[12px] leading-snug text-[#E5E7EB]/90">{running.message}</p>
         </div>
-        <span className="flex shrink-0 items-center gap-1 text-[10px] text-muted-foreground">
+        <span className="flex w-[86px] shrink-0 items-center justify-end gap-1 text-[10px] text-muted-foreground">
           <span className="relative flex h-2 w-2">
             <span className="absolute inline-flex h-full w-full animate-ping rounded-full bg-primary/45 opacity-50" />
             <span className="relative inline-flex h-2 w-2 rounded-full bg-primary" />
@@ -185,17 +160,17 @@ function LogRow({ entry }: { entry: ExecutionLogEntry }) {
         </p>
         <p className="mt-0.5 text-[12px] leading-snug text-[#E5E7EB]/82">{summaryLine}</p>
       </div>
-      <div className="flex shrink-0 flex-col items-end gap-1 text-[10px] text-muted-foreground/95">
-        <span className="flex items-center gap-1 tabular-nums">
+      <div className="flex w-[86px] shrink-0 flex-col items-end gap-1 text-[10px] text-muted-foreground/95">
+        <span className="flex w-full items-center justify-end gap-1 tabular-nums">
           <Clock className="h-3 w-3 opacity-80" />
           {formatTime(entry.at)}
         </span>
         {done && entry.durationMs != null && (
-          <span className="text-emerald-400/95">{formatDuration(entry.durationMs)}</span>
+          <span className="w-full text-right text-emerald-400/95">{formatDuration(entry.durationMs)}</span>
         )}
         {hasDetails && (
           <ChevronDown
-            className={cn("mt-0.5 h-3.5 w-3.5 opacity-60 transition-transform", open && "rotate-180")}
+            className={cn("mt-0.5 h-3.5 w-3.5 self-end opacity-60 transition-transform", open && "rotate-180")}
           />
         )}
       </div>

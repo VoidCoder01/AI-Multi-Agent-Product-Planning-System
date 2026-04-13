@@ -26,3 +26,10 @@ class MemoryStore:
         if not path.is_file():
             return None
         return json.loads(path.read_text(encoding="utf-8"))
+
+    def list_sessions(self) -> list[str]:
+        """Return all session IDs."""
+        return [p.stem for p in self._base.glob("*.json")]
+
+    def __len__(self) -> int:
+        return len(list(self._base.glob("*.json")))

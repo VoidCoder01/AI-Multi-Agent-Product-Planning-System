@@ -191,3 +191,8 @@ def get_session(session_id: str):
     if data is None:
         raise HTTPException(status_code=404, detail="Session not found")
     return data
+
+
+@app.get("/api/sessions")
+def list_sessions():
+    return {"sessions": get_orchestrator()._memory.list_sessions()}

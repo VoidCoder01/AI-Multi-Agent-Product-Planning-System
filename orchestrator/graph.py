@@ -10,6 +10,8 @@ from langgraph.graph import END, START, StateGraph
 
 from schemas.state import PlanningState
 from schemas.validation import (
+    apply_feasibility_feedback_to_story_and_tasks,
+    apply_pm_review_feedback_to_brief,
     run_final_pipeline_validation,
     validate_architecture,
     validate_project_brief,
@@ -77,8 +79,13 @@ def compile_planning_graph(orch: Orchestrator):
     def node_pm(state: PlanningState) -> dict:
         brief = state["project_brief"]
         review = orch.pm_agent.review_project_brief(brief)
-        prd = orch.pm_agent.create_prd(brief, brief_review=review)
-        return {"prd": prd, "pm_brief_review": review}
+        patched_brief = apply_pm_review_feedback_to_brief(brief, review)
+        prd = orch.pm_agent.create_prd(patched_brief, brief_review=review)
+        return {
+            "project_brief": patched_brief,
+            "prd": prd,
+            "pm_brief_review": review,
+        }
 
     def node_validate_prd(state: PlanningState) -> dict:
         prd = state.get("prd") or {}
@@ -147,7 +154,16 @@ def compile_planning_graph(orch: Orchestrator):
             state.get("architecture"),
         )
         tasks = orch.task_agent.create_tasks(epics, feasibility_review=feas)
-        return {"tasks": tasks, "task_feasibility": feas}
+        patched_es, tasks = apply_feasibility_feedback_to_story_and_tasks(
+            state.get("epics_stories") or {},
+            tasks,
+            feas,
+        )
+        return {
+            "epics_stories": patched_es,
+            "tasks": tasks,
+            "task_feasibility": feas,
+        }
 
     def node_final_validation(state: PlanningState) -> dict:
         report = run_final_pipeline_validation(state)
