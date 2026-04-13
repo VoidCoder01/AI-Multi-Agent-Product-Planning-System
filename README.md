@@ -30,7 +30,7 @@ Multi-agent orchestration (BMAD-style): a user provides a product idea, the syst
 ```
 
 - **Master orchestrator:** `backend/orchestrator.py` — builds a **LangGraph** compiled graph (`orchestrator/graph.py`) and delegates each step to the right agent class.
-- **Agents:** `agents/` — each role has its own module; prompts live under `backend/prompts/`; all inherit `BaseAgent` (shared Claude client). (`backend/agents/` contains import shims for tests only.)
+- **Agents:** `agents/` — each role has its own module; prompts live under `backend/prompts/`; all inherit `BaseAgent` (shared Claude client).
 - **API:** `backend/main.py` — `POST /api/questions`, `POST /api/generate`; production React build served under `/ui/` (see below).
 - **Outputs:** `Orchestrator.save_to_files()` writes to `docs/` (see below).
 
@@ -69,6 +69,7 @@ Multi-agent orchestration (BMAD-style): a user provides a product idea, the syst
 | **Clarification** | Scope, users, features, constraints | JSON array of question strings |
 | **Requirement** | Structured brief from Q&A | JSON: name, problem, users, features, constraints |
 | **PM** | PRD from brief | JSON: overview, goals, personas, functional/NFR, metrics |
+| **Architect** *(bonus)* | Technical architecture from PRD + brief | JSON: services, stack, data flow, scale/security |
 | **Scrum** | Agile backlog | JSON: epics → stories → acceptance criteria |
 | **Task** | Engineering breakdown | JSON: per-story tasks and subtasks |
 
@@ -248,14 +249,32 @@ pytest backend/tests/ -v
 
 ---
 
-## AI tooling disclosure (fill in for submission)
+## AI tooling disclosure
 
 | Tool | Purpose |
 |------|---------|
-| *e.g. Cursor / Claude / ChatGPT* | *Scaffolding, debugging, README* |
-| *Anthropic API* | *Runtime LLM for all agents* |
+| Cursor (agent mode) | Iterative implementation support, refactors, Dockerization, UI fixes, and test scaffolding |
+| Anthropic API (Claude Sonnet model via SDK) | Runtime LLM execution for all planning agents during workflow generation |
+| Local pytest + Vitest tooling | Regression checks for prompt loading, task ID normalization, API behavior, and frontend components |
 
-*Replace the first row with what you actually used and how it helped.*
+---
+
+## Beyond the assignment spec
+
+Features implemented beyond the core requirements:
+
+- **Architect Agent** — an additional 6th agent (not required) that generates technical architecture between PRD and backlog, informing epic sequencing and task feasibility.
+- **Cross-document validation** — `run_final_pipeline_validation()` checks consistency across brief, PRD, architecture, epics, and tasks (for example deferred features leaking into MVP epics or stack mismatches).
+- **Agent review loops** — PM reviews the brief before writing PRD; Scrum reviews the PRD before creating epics; Task agent validates feasibility before task breakdown; review feedback is applied downstream.
+- **Parallel task generation** — `TaskAgent` processes epics concurrently with configurable worker count via `TASK_AGENT_MAX_WORKERS`.
+- **Versioned prompts** — prompts stored as Markdown with YAML frontmatter and loaded via `prompt_loader.py` with strict template validation.
+- **Structured audit logging** — LLM calls logged to JSONL with agent name, phase, duration, prompt metadata, and truncated I/O.
+- **Session memory** — `MemoryStore` persists full pipeline results as JSON per session ID, with retrieval endpoints.
+- **Document versioning** — `save_to_files(version_subdir=True)` creates timestamped output directories.
+- **Output validation CLI** — `python backend/validate_output.py result.json` checks duplicate epic/story/task IDs.
+- **Docker support** — multi-stage Dockerfile plus production and hot-reload compose files.
+- **Workflow visualization API** — `/api/workflow/diagram` exposes a Mermaid graph for the active pipeline.
+- **SSE progress streaming** — `/api/generate/stream` emits stage-level workflow progress events.
 
 ---
 
@@ -267,9 +286,21 @@ MIT — see [LICENSE](LICENSE).
 
 ## Submission checklist (assignment)
 
-- [ ] Public GitHub repo + MIT license  
-- [ ] README with architecture, agents, prompts, workflow, setup, example  
-- [ ] `docs/` + `agents/` + `backend/` + `frontend/`  
-- [ ] Loom video (overview, architecture, orchestration, stack, live demo)  
+- [x] Public GitHub repo + MIT license
+- [x] README with architecture, agents, prompts, workflow, setup, example
+- [x] `docs/` with generated artifacts + `agents/` + `backend/`
+- [x] Loom video (overview, architecture, orchestration, stack, live demo)
+- [x] AI tooling disclosure filled in
 
-**Bonus ideas (not required):** memory, versioning, RAG, debug logs UI, workflow graph visualization.
+### Bonus features implemented
+
+- [x] Memory system (MemoryStore - file-backed session persistence)
+- [x] Document versioning (timestamped subdirectories)
+- [x] Agent debugging logs (structured JSONL audit trail)
+- [x] Visual workflow graph (Mermaid diagram via API)
+- [x] Cross-document validation (consistency checks across all artifacts)
+- [x] Architect agent (bonus 6th agent beyond spec)
+- [x] Review loops (PM reviews brief, Scrum reviews PRD, Task validates feasibility)
+- [x] Parallel task generation (configurable thread pool)
+- [x] Docker support (multi-stage build, dev + prod compose)
+- [x] SSE streaming endpoint
