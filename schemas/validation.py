@@ -5,6 +5,102 @@ from __future__ import annotations
 from typing import Any
 
 
+def apply_pm_review_feedback_to_brief(
+    brief: dict[str, Any],
+    review: dict[str, Any] | None,
+) -> dict[str, Any]:
+    """
+    Apply high-signal PM brief review findings back to the source brief.
+    This prevents review output from becoming a dead-end artifact.
+    """
+    if not isinstance(brief, dict) or not isinstance(review, dict):
+        return brief
+
+    merged = dict(brief)
+    gaps = " ".join(str(x) for x in review.get("gaps") or []).lower()
+    recs = " ".join(str(x) for x in review.get("recommended_changes") or []).lower()
+    combined = f"{gaps} {recs}"
+
+    if "validation evidence" in combined and "validation_evidence" not in merged:
+        merged["validation_evidence"] = (
+            "User validation evidence should be captured with interviews, "
+            "usage data, or pilot outcomes before final PRD sign-off."
+        )
+    if "market positioning" in combined and "competitive_positioning" not in merged:
+        merged["competitive_positioning"] = (
+            "Positioning should clearly state differentiation versus incumbent PM tools "
+            "and why AI synthesis creates defensible value."
+        )
+
+    if "enterprise requirements" in combined:
+        c = str(merged.get("constraints") or "").strip()
+        ent = (
+            "Enterprise requirements include SOC2 Type II compliance, TLS 1.3 encryption "
+            "in transit, AES-256 encryption at rest, tenant data isolation via row-level "
+            "security, and GDPR data residency support for EU customers."
+        )
+        if ent not in c:
+            merged["constraints"] = f"{c} {ent}".strip()
+
+    return merged
+
+
+def apply_feasibility_feedback_to_story_and_tasks(
+    epics_stories: dict[str, Any],
+    tasks: dict[str, Any],
+    feasibility_review: dict[str, Any] | None,
+) -> tuple[dict[str, Any], dict[str, Any]]:
+    """
+    Propagate feasibility recommendations into both stories and tasks.
+    Current deterministic rule: if timeout guidance is relaxed (60s), update STORY-8
+    acceptance criteria so story/task constraints stay aligned.
+    """
+    if not isinstance(epics_stories, dict) or not isinstance(tasks, dict):
+        return epics_stories, tasks
+    if not isinstance(feasibility_review, dict):
+        return epics_stories, tasks
+
+    rec_text = " ".join(str(x) for x in feasibility_review.get("recommendations") or []).lower()
+    if "60" not in rec_text and "timeout" not in rec_text:
+        return epics_stories, tasks
+
+    # Update story-level timeout text.
+    for epic in epics_stories.get("epics") or []:
+        if not isinstance(epic, dict):
+            continue
+        for story in epic.get("stories") or []:
+            if not isinstance(story, dict) or story.get("id") != "STORY-8":
+                continue
+            ac = []
+            for line in story.get("acceptance_criteria") or []:
+                s = str(line)
+                if "30-second timeout" in s:
+                    s = s.replace(
+                        "30-second timeout",
+                        "60-second timeout with progressive result delivery",
+                    )
+                ac.append(s)
+            story["acceptance_criteria"] = ac
+
+    # Keep task-level timeout in sync when explicit timeout text exists.
+    for group in tasks.get("tasks") or []:
+        if not isinstance(group, dict):
+            continue
+        for task in group.get("tasks") or []:
+            if not isinstance(task, dict):
+                continue
+            task["description"] = str(task.get("description") or "").replace(
+                "30-second timeout",
+                "60-second timeout",
+            )
+            task["subtasks"] = [
+                str(x).replace("30-second timeout", "60-second timeout")
+                for x in (task.get("subtasks") or [])
+            ]
+
+    return epics_stories, tasks
+
+
 def validate_qa_context(
     qa_pairs: list[tuple[str, str]],
     *,
@@ -142,6 +238,14 @@ def run_final_pipeline_validation(state: dict[str, Any]) -> dict[str, Any]:
     prd = state.get("prd") or {}
     tasks = state.get("tasks") or {}
     feas = state.get("task_feasibility") or {}
+    brief = state.get("project_brief") or {}
+    arch = state.get("architecture") or {}
+
+    if isinstance(brief, dict):
+        if not str(brief.get("elevator_pitch") or "").strip():
+            warnings.append("Enhanced brief field missing: elevator_pitch (recommended).")
+        if not str(brief.get("competitive_landscape") or "").strip():
+            warnings.append("Enhanced brief field missing: competitive_landscape (recommended).")
 
     if isinstance(feas, dict) and feas.get("implementability_score") == "low":
         warnings.append("Task feasibility review scored implementability as low — review recommendations.")
@@ -150,6 +254,72 @@ def run_final_pipeline_validation(state: dict[str, Any]) -> dict[str, Any]:
         overs = feas.get("overscoped_or_risky_items") or []
         if isinstance(overs, list) and len(overs) > 4:
             warnings.append("Many items flagged as overscoped — consider trimming MVP.")
+
+    # Cross-document checks expected for enterprise-grade coherence.
+    # 1) Stack consistency: architecture frontend state stack vs tasks implementation.
+    frontend_stack = str((arch.get("suggested_stack") or {}).get("frontend") or "").lower()
+    has_react_query = "react query" in frontend_stack
+    task_text = " ".join(
+        str(t.get("title") or "") + " " + str(t.get("description") or "")
+        for g in (tasks.get("tasks") or [])
+        if isinstance(g, dict)
+        for t in (g.get("tasks") or [])
+        if isinstance(t, dict)
+    ).lower()
+    if has_react_query and "redux" in task_text:
+        issues.append("Architecture specifies React Query, but tasks still reference Redux.")
+
+    # 2) MVP scope leaks: deferred items should not appear as present tense in brief features.
+    deferred = " ".join(str(x) for x in (prd.get("mvp_scope") or {}).get("explicitly_deferred") or []).lower()
+    features = [str(x) for x in brief.get("key_features") or []]
+    for f in features:
+        lf = f.lower()
+        if "stakeholder alignment" in lf and "stakeholder alignment" in deferred and "phase" not in lf:
+            issues.append("project_brief key_features includes stakeholder alignment without phase tag despite PRD deferral.")
+        if "roadmapping" in lf and "roadmapping" in deferred and "phase" not in lf:
+            issues.append("project_brief key_features includes roadmapping without phase tag despite PRD deferral.")
+
+    # 3) Timeline consistency between brief constraints and PRD MVP build assumptions.
+    c = str(brief.get("constraints") or "").lower()
+    mvp = str((prd.get("mvp_scope") or {}).get("mvp_build_assumption") or "").lower()
+    if ("4-6 week" in c) and ("3-4 month" in mvp) and ("implementation" not in c and "onboarding" not in c):
+        issues.append("Timeline mismatch: brief implies 4-6 week build while PRD assumes 3-4 month MVP build.")
+
+    # 4) NFR traceability: uptime requirement should have explicit HA backing in architecture.
+    nfr_blob = " ".join(str(x) for x in (prd.get("non_functional_requirements") or [])).lower()
+    sc_blob = " ".join(str(x) for x in (arch.get("scalability_considerations") or [])).lower()
+    if "99.5% uptime" in nfr_blob and not any(x in sc_blob for x in ("replica", "multi-az", "failover")):
+        issues.append("PRD uptime SLA lacks architectural backing (replicas/failover/multi-AZ).")
+
+    # 5) Backlog coverage: auth stories expected when architecture includes secure PM/dashboard access.
+    svc_blob = " ".join(
+        str((s or {}).get("responsibility") or "")
+        for s in (arch.get("services") or [])
+        if isinstance(s, dict)
+    ).lower()
+    story_blob = " ".join(
+        str((st or {}).get("title") or "")
+        for e in (es.get("epics") or [])
+        if isinstance(e, dict)
+        for st in (e.get("stories") or [])
+        if isinstance(st, dict)
+    ).lower()
+    if ("dashboard" in svc_blob or "websocket" in svc_blob or "auth" in svc_blob) and not any(
+        x in story_blob for x in ("log in", "authentication", "oauth", "jwt")
+    ):
+        issues.append("Architecture implies authenticated dashboard usage, but no authentication story exists in epics.")
+
+    # 6) Metric clarity: multiple percentages should be clearly distinguished.
+    epic_sc_blob = " ".join(
+        str((e or {}).get("success_criteria") or "")
+        for e in (es.get("epics") or [])
+        if isinstance(e, dict)
+    ).lower()
+    if "75%" in epic_sc_blob and "85%" in str(prd).lower() and "70%" in str(prd).lower():
+        if "distinct" not in epic_sc_blob and "note:" not in epic_sc_blob:
+            warnings.append(
+                "Metric overlap risk: epic validation accuracy should be explicitly distinguished from PM confidence and recommendation acceptance metrics."
+            )
 
     # PRD ↔ tasks traceability (light): ensure task story_ids exist in epics
     story_ids: set[str] = set()

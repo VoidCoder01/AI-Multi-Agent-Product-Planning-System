@@ -22,7 +22,7 @@ AGENT_PROMPT_CONFIG: dict[str, dict[str, Any]] = {
     },
     "clarification_agent": {
         "model": _DEFAULT_MODEL,
-        "prompt": "clarification/ask_v1.md",
+        "prompt": "clarification/ask_v2.md",
     },
     "clarification_refine": {
         "model": _DEFAULT_MODEL,
@@ -30,7 +30,7 @@ AGENT_PROMPT_CONFIG: dict[str, dict[str, Any]] = {
     },
     "requirement_agent": {
         "model": _DEFAULT_MODEL,
-        "prompt": "requirement/brief_v1.md",
+        "prompt": "requirement/brief_v2.md",
     },
     "architect_agent": {
         "model": _DEFAULT_MODEL,
