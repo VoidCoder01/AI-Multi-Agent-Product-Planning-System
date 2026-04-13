@@ -5,14 +5,16 @@ FastAPI entry: orchestrator, /api/questions, /api/generate, static UI at /ui.
 from __future__ import annotations
 
 import logging
+import os
 import sys
 from pathlib import Path
 
 from dotenv import load_dotenv
 from fastapi import FastAPI, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi.responses import JSONResponse
 from fastapi.staticfiles import StaticFiles
-from pydantic import BaseModel, Field
+from pydantic import BaseModel
 
 # Load .env from repo root and backend/
 _ROOT = Path(__file__).resolve().parent.parent
@@ -28,6 +30,7 @@ logging.basicConfig(
 )
 
 from backend.orchestrator import Orchestrator
+from schemas.models import GenerateBody, ProductIdeaBody
 
 _orchestrator: Orchestrator | None = None
 
@@ -63,14 +66,10 @@ if _UI_DIST.is_dir():
     )
 
 
-class ProductIdeaRequest(BaseModel):
-    product_idea: str = Field(..., min_length=1)
-
-
-class AnswersRequest(BaseModel):
-    product_idea: str = Field(..., min_length=1)
-    answers: dict = Field(default_factory=dict)
-    questions: list[str] | None = None
+class ErrorResponse(BaseModel):
+    error: str
+    detail: str | None = None
+    stage: str | None = None
 
 
 @app.get("/")
@@ -84,22 +83,43 @@ def root():
 
 @app.get("/health")
 def health():
-    return {"status": "ok"}
+    has_key = bool(os.getenv("ANTHROPIC_API_KEY"))
+    return {"status": "ok" if has_key else "degraded", "api_key_configured": has_key}
 
 
-@app.post("/api/questions")
-def get_questions(request: ProductIdeaRequest):
+@app.get("/api/health")
+def api_health():
+    return health()
+
+
+@app.exception_handler(Exception)
+async def global_exception_handler(_request, exc: Exception):
+    return JSONResponse(
+        status_code=500,
+        content={"error": type(exc).__name__, "detail": str(exc)},
+    )
+
+
+@app.post("/api/questions", responses={500: {"model": ErrorResponse}})
+def get_questions(request: ProductIdeaBody):
     try:
         questions = get_orchestrator().clarification_agent.ask_questions(
             request.product_idea
         )
         return {"questions": questions}
     except Exception as e:
-        raise HTTPException(status_code=500, detail=str(e)) from e
+        raise HTTPException(
+            status_code=500,
+            detail={
+                "error": type(e).__name__,
+                "message": str(e),
+                "stage": "clarification",
+            },
+        ) from e
 
 
-@app.post("/api/generate")
-def generate_documentation(request: AnswersRequest):
+@app.post("/api/generate", responses={500: {"model": ErrorResponse}})
+def generate_documentation(request: GenerateBody):
     try:
         return get_orchestrator().run_workflow(
             request.product_idea,
@@ -107,4 +127,19 @@ def generate_documentation(request: AnswersRequest):
             questions=request.questions,
         )
     except Exception as e:
-        raise HTTPException(status_code=500, detail=str(e)) from e
+        raise HTTPException(
+            status_code=500,
+            detail={
+                "error": type(e).__name__,
+                "message": str(e),
+                "stage": "workflow_generation",
+            },
+        ) from e
+
+
+@app.get("/api/sessions/{session_id}")
+def get_session(session_id: str):
+    data = get_orchestrator()._memory.load(session_id)
+    if data is None:
+        raise HTTPException(status_code=404, detail="Session not found")
+    return data
