@@ -16,7 +16,7 @@ export function TerminalHeader() {
           </div>
           <div className="min-w-0">
             <h1 className="truncate text-[15px] font-semibold tracking-tight text-[#E5E7EB]">
-              NexPlan<span className="text-primary">.AI</span>
+            TaskWeave<span className="text-primary">AI</span>
             </h1>
             <p className="truncate text-[11px] font-medium uppercase tracking-[0.14em] text-muted-foreground">
               Multi-agent product planning
