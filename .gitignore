@@ -9,11 +9,10 @@ build/
 .ruff_cache/
 node_modules/
 frontend/dist/
+frontend/.vite/
+*.tsbuildinfo
 logs/*.jsonl
 data/planning_memory/
 .DS_Store
 .cursorrules
-.env.example\
 venv/
-venv/
-.env.example
