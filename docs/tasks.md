@@ -790,10 +790,10 @@
         {
           "id": "TASK-63",
           "title": "Implement CI/CD pipeline with GitHub Actions",
-          "description": "Build automated deployment pipeline with linting, testing, Docker build, and ECS deployment stages. Include environment-specific configurations for staging and production.",
+          "description": "Build automated deployment pipeline with linting, testing, artifact packaging, and ECS deployment stages. Include environment-specific configurations for staging and production.",
           "subtasks": [
             "Create GitHub Actions workflow for CI (lint, test, build)",
-            "Add Docker image build and ECR push stage",
+            "Add artifact packaging and ECR push stage",
             "Implement ECS deployment with blue-green strategy",
             "Add staging environment for pre-production validation"
           ]

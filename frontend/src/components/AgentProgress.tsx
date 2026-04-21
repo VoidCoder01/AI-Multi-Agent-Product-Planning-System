@@ -33,6 +33,14 @@ const PHASES = [
     tip: "Writing functional requirements and success metrics",
   },
   {
+    id: "architect",
+    name: "Architect Agent",
+    icon: "🏗️",
+    message: "Designing technical architecture...",
+    emoji: "⚙️",
+    tip: "Defining services, stack, data flow, and scalability strategy",
+  },
+  {
     id: "scrum",
     name: "Scrum Master",
     icon: "📊",
@@ -43,21 +51,31 @@ const PHASES = [
   {
     id: "task",
     name: "Tech Lead",
-    icon: "⚙️",
-    message: "Decomposing into tasks...",
+    icon: "⚒️",
+    message: "Decomposing into engineering tasks...",
     emoji: "🔨",
-    tip: "Breaking user stories into actionable engineering tasks",
+    tip: "Breaking user stories into actionable engineering tasks with feasibility checks",
+  },
+  {
+    id: "validation",
+    name: "Final Validation",
+    icon: "✅",
+    message: "Running cross-document checks...",
+    emoji: "🛡️",
+    tip: "Ensuring consistency across brief, PRD, architecture, epics, and tasks",
   },
 ] as const;
 
 const ROTATING_TIPS = [
-  "💡 This AI system uses 5 specialized agents working together like a real product team",
-  "🚀 Powered by Claude Sonnet 4 — strong reasoning for structured documentation",
-  "📊 We're generating epics, stories, and many engineering tasks from your idea",
+  "💡 7 specialized agents work together like a real product team",
+  "🚀 Powered by OpenRouter — route to any LLM model without changing code",
+  "📊 Generating epics, stories, and engineering tasks from your idea",
   "⚡ Each agent has a unique system prompt optimized for its role",
   "🎯 The PRD includes functional and non-functional requirements",
   "🔄 LangGraph orchestrates the sequential workflow between agents",
-  "✨ Your download will include brief, PRD, epics, stories, and tasks",
+  "🏗️ The Architect agent designs services, stack, and data flow",
+  "✨ Your download will include brief, PRD, architecture, epics, stories, and tasks",
+  "📎 Upload a PDF or TXT to inject context into the planning via RAG",
 ];
 
 const PHASE_MS = 12_000;

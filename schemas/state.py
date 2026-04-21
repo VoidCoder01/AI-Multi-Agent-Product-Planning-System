@@ -24,6 +24,7 @@ class PlanningState(TypedDict, total=False):
     task_feasibility: dict
     tasks: dict
     final_validation: dict
+    evaluation_scores: dict  # EvaluatorAgent quality scores
     validation_errors: list[str]
     clarify_round: int
     max_clarify_rounds: int
@@ -31,3 +32,4 @@ class PlanningState(TypedDict, total=False):
     needs_retry_clarify: bool
     halt_reason: str | None
     session_id: str | None
+    rag_context: list[dict]

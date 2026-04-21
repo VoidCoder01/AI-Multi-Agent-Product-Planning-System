@@ -5,11 +5,15 @@ FastAPI entry: orchestrator, /api/questions, /api/generate, static UI at /ui.
 from __future__ import annotations
 
 import asyncio
+import base64
+import io
 import json
 import logging
 import os
 import sys
+from datetime import datetime, timezone
 from pathlib import Path
+from uuid import uuid4
 
 from dotenv import load_dotenv
 from fastapi import FastAPI, HTTPException
@@ -33,6 +37,8 @@ logging.basicConfig(
 
 from backend.orchestrator import Orchestrator
 from schemas.models import GenerateBody, ProductIdeaBody
+from utils.chunking import chunk_text
+from utils.embeddings import build_vector_index
 
 _orchestrator: Orchestrator | None = None
 
@@ -74,6 +80,41 @@ class ErrorResponse(BaseModel):
     stage: str | None = None
 
 
+class UploadDocumentBody(BaseModel):
+    filename: str
+    content_base64: str
+    session_id: str | None = None
+
+
+def _extract_text_from_pdf(content: bytes) -> str:
+    """Extract PDF text via pdfplumber (phase-1 RAG ingestion)."""
+    try:
+        import pdfplumber  # type: ignore
+    except ImportError as exc:  # pragma: no cover - env-dependent
+        raise HTTPException(
+            status_code=500,
+            detail="PDF upload requires `pdfplumber` to be installed.",
+        ) from exc
+
+    pages: list[str] = []
+    with pdfplumber.open(io.BytesIO(content)) as pdf:
+        for page in pdf.pages:
+            pages.append(page.extract_text() or "")
+    return "\n".join(pages).strip()
+
+
+def _extract_document_text(filename: str, content: bytes) -> str:
+    ext = Path(filename).suffix.lower()
+    if ext == ".txt":
+        return content.decode("utf-8", errors="ignore").strip()
+    if ext == ".pdf":
+        return _extract_text_from_pdf(content)
+    raise HTTPException(
+        status_code=400,
+        detail="Unsupported file type. Upload .txt or .pdf files only.",
+    )
+
+
 @app.get("/")
 def root():
     return {
@@ -85,7 +126,7 @@ def root():
 
 @app.get("/health")
 def health():
-    has_key = bool(os.getenv("ANTHROPIC_API_KEY"))
+    has_key = bool(os.getenv("OPENROUTER_API_KEY") or os.getenv("open_router_api_key"))
     return {"status": "ok" if has_key else "degraded", "api_key_configured": has_key}
 
 
@@ -127,6 +168,7 @@ def generate_documentation(request: GenerateBody):
             request.product_idea,
             request.answers,
             questions=request.questions,
+            session_id=request.session_id,
         )
     except Exception as e:
         raise HTTPException(
@@ -141,42 +183,125 @@ def generate_documentation(request: GenerateBody):
 
 @app.post("/api/generate/stream")
 async def generate_stream(request: GenerateBody):
-    """Stream workflow progress as server-sent events."""
+    """Stream real per-node workflow progress as server-sent events."""
 
     async def event_stream():
-        stages = [
-            ("clarification", "Analyzing product idea..."),
-            ("requirement", "Generating project brief..."),
-            ("pm_review", "PM reviewing brief..."),
-            ("prd", "Writing PRD..."),
-            ("architect", "Designing architecture..."),
-            ("scrum_review", "Scrum reviewing PRD..."),
-            ("epics", "Creating epics and stories..."),
-            ("feasibility", "Validating feasibility..."),
-            ("tasks", "Breaking down tasks..."),
-            ("validation", "Final validation..."),
-        ]
-        for stage_name, message in stages:
-            payload = {"stage": stage_name, "status": "started", "message": message}
-            yield f"data: {json.dumps(payload)}\n\n"
+        import queue
+        import threading
 
-        try:
-            result = await asyncio.to_thread(
-                get_orchestrator().run_workflow,
-                request.product_idea,
-                request.answers,
-                questions=request.questions,
-            )
-            yield f"data: {json.dumps({'stage': 'complete', 'status': 'done', 'result': result})}\n\n"
-        except Exception as exc:
-            payload = {
-                "stage": "error",
-                "status": "failed",
-                "error": {"type": type(exc).__name__, "message": str(exc)},
-            }
-            yield f"data: {json.dumps(payload)}\n\n"
+        q: queue.Queue = queue.Queue()
+        SENTINEL = object()
+
+        def run_in_thread():
+            try:
+                orch = get_orchestrator()
+                for node_name, message, node_output in orch.run_workflow_streaming(
+                    request.product_idea,
+                    request.answers,
+                    questions=request.questions,
+                    session_id=request.session_id,
+                ):
+                    if node_name == "complete":
+                        q.put({"stage": "complete", "status": "done", "result": node_output})
+                    else:
+                        q.put({"stage": node_name, "status": "completed", "message": message})
+            except Exception as exc:
+                q.put({
+                    "stage": "error",
+                    "status": "failed",
+                    "error": {"type": type(exc).__name__, "message": str(exc)},
+                })
+            finally:
+                q.put(SENTINEL)
+
+        thread = threading.Thread(target=run_in_thread, daemon=True)
+        thread.start()
+
+        loop = asyncio.get_event_loop()
+        while True:
+            item = await loop.run_in_executor(None, q.get)
+            if item is SENTINEL:
+                break
+            yield f"data: {json.dumps(item)}\n\n"
 
     return StreamingResponse(event_stream(), media_type="text/event-stream")
+
+
+@app.post("/api/upload", responses={500: {"model": ErrorResponse}})
+async def upload_document(request: UploadDocumentBody):
+    """
+    Upload a TXT/PDF document, chunk it, embed it, and store in session memory.
+    """
+    if not request.filename:
+        raise HTTPException(status_code=400, detail="Missing filename in upload request.")
+
+    try:
+        content = base64.b64decode(request.content_base64, validate=True)
+    except Exception as exc:
+        raise HTTPException(
+            status_code=400,
+            detail="Invalid base64 content. Encode your file bytes using base64 before upload.",
+        ) from exc
+
+    text = _extract_document_text(request.filename, content)
+    if not text:
+        raise HTTPException(
+            status_code=400,
+            detail="Could not extract text from document. Please upload a text-based PDF/TXT.",
+        )
+
+    source = request.filename
+    chunks = chunk_text(text, source=source, chunk_size_tokens=800, overlap_tokens=100)
+    indexed = build_vector_index(chunks)
+
+    orch = get_orchestrator()
+    payload = orch._memory.load(request.session_id) if request.session_id else None
+    if not isinstance(payload, dict):
+        payload = {}
+    rag = payload.get("rag")
+    if not isinstance(rag, dict):
+        rag = {}
+
+    documents = rag.get("documents")
+    if not isinstance(documents, list):
+        documents = []
+    index = rag.get("index")
+    if not isinstance(index, list):
+        index = []
+    raw_documents = rag.get("raw_documents")
+    if not isinstance(raw_documents, dict):
+        raw_documents = {}
+
+    doc_id = str(uuid4())
+    uploaded_at = datetime.now(timezone.utc).isoformat()
+    documents.append(
+        {
+            "doc_id": doc_id,
+            "filename": source,
+            "uploaded_at": uploaded_at,
+            "char_count": len(text),
+            "chunk_count": len(chunks),
+        }
+    )
+    raw_documents[doc_id] = text
+    index.extend(indexed)
+
+    rag["documents"] = documents
+    rag["raw_documents"] = raw_documents
+    rag["index"] = index
+    payload["rag"] = rag
+
+    sid = orch._memory.save(payload, session_id=request.session_id)
+    return {
+        "session_id": sid,
+        "document": {
+            "doc_id": doc_id,
+            "filename": source,
+            "char_count": len(text),
+            "chunk_count": len(chunks),
+        },
+        "index_size": len(index),
+    }
 
 
 @app.get("/api/workflow/diagram")

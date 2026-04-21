@@ -40,7 +40,7 @@ def _env_float(name: str, default: float, *, min_value: float = 0.0) -> float:
 
 @dataclass(frozen=True)
 class LLMSettings:
-    """Anthropic client + retry behavior."""
+    """OpenRouter-backed LLM client + retry behavior."""
 
     model: str
     max_retries: int
@@ -61,12 +61,16 @@ def get_llm_settings() -> LLMSettings:
     max_retries: extra attempts after the first failure (total calls = max_retries + 1).
     """
     return LLMSettings(
-        model=_env_str("ANTHROPIC_MODEL", "claude-sonnet-4-20250514"),
+        model=_env_str("OPENROUTER_MODEL", _env_str("ANTHROPIC_MODEL", "openrouter/free")),
         max_retries=max(0, _env_int("LLM_MAX_RETRIES", 2, min_value=0)),
         retry_backoff_base_sec=_env_float(
             "LLM_RETRY_BACKOFF_BASE_SEC", 0.6, min_value=0.0
         ),
-        timeout_sec=_env_float("ANTHROPIC_TIMEOUT_SEC", 300.0, min_value=30.0),
+        timeout_sec=_env_float(
+            "LLM_TIMEOUT_SEC",
+            _env_float("ANTHROPIC_TIMEOUT_SEC", 300.0, min_value=30.0),
+            min_value=30.0,
+        ),
         log_input_max_chars=_env_int("AGENT_LOG_INPUT_MAX_CHARS", 6000, min_value=500),
         log_output_max_chars=_env_int("AGENT_LOG_OUTPUT_MAX_CHARS", 6000, min_value=500),
     )

@@ -43,6 +43,8 @@ class PMAgent(BaseAgent):
         self,
         project_brief: dict[str, Any],
         brief_review: dict[str, Any] | None = None,
+        *,
+        context_chunks: list[dict[str, Any]] | None = None,
     ) -> dict[str, Any]:
         cfg = AGENT_PROMPT_CONFIG["prd_agent"]
         system, loaded_sys, meta_sys = prepare_rendered(str(cfg["prompt"]), {})
@@ -52,13 +54,19 @@ class PMAgent(BaseAgent):
                 "\n\nYour prior review of this brief (must address gaps and recommendations):\n"
                 f"{json.dumps(brief_review, indent=2, ensure_ascii=False)}"
             )
+        rag_context_section = ""
+        if context_chunks:
+            rag_context_section = (
+                "\n\nRetrieved context (ground your PRD decisions using this evidence when relevant):\n"
+                f"{json.dumps(context_chunks[:5], indent=2, ensure_ascii=False)}"
+            )
         user, _, meta_user = prepare_rendered(
             str(cfg["user_prompt"]),
             {
                 "project_brief_json": json.dumps(
                     project_brief, indent=2, ensure_ascii=False
                 ),
-                "brief_review_section": brief_section,
+                "brief_review_section": brief_section + rag_context_section,
             },
             validate_output_format=False,
         )
@@ -79,6 +87,7 @@ class PMAgent(BaseAgent):
 
     def run(self, state: dict[str, Any]) -> dict[str, Any]:
         brief = state.get("project_brief") or {}
+        ctx = state.get("rag_context") if isinstance(state.get("rag_context"), list) else None
         review = self.review_project_brief(brief)
-        prd = self.create_prd(brief, brief_review=review)
+        prd = self.create_prd(brief, brief_review=review, context_chunks=ctx)
         return {"prd": prd, "pm_brief_review": review}

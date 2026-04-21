@@ -1,0 +1,206 @@
+PRODUCT SPECIFICATION — HealthTrack Pro
+Version: 1.2 | Status: Approved | Date: April 2026
+
+========================================================
+1. EXECUTIVE SUMMARY
+========================================================
+
+HealthTrack Pro is a B2C mobile-first health and wellness platform targeting
+working professionals aged 25–45. The platform enables users to log meals,
+track workouts, monitor sleep, and receive AI-powered personalized
+recommendations. The MVP targets iOS and Android via React Native with a
+FastAPI backend hosted on AWS.
+
+Annual revenue target: $2.4M ARR by end of Year 1.
+Target user base: 50,000 MAU within 6 months of launch.
+Monetization: Freemium — $9.99/month Pro tier, $79.99/year Annual.
+
+
+========================================================
+2. CORE TECHNICAL CONSTRAINTS
+========================================================
+
+2.1 Performance Requirements
+- API response time: P95 < 200ms for all read endpoints
+- API response time: P99 < 500ms for write endpoints
+- Mobile app cold start: < 2 seconds on mid-range Android devices
+- Offline-first: core logging features must work without network
+- Data sync: conflict resolution required for offline edits
+
+2.2 Scalability Targets
+- 50,000 MAU Day 1 capacity (sudden spike from App Store feature)
+- 500,000 MAU within 18 months (Phase 2)
+- Peak load: 10x average — assume viral growth event handling
+- Horizontal scaling via AWS ECS Fargate container fleet
+- Database: PostgreSQL on RDS Aurora Serverless v2
+
+2.3 Data & Privacy
+- HIPAA compliance required (health data is PHI)
+- All PII encrypted at rest using AES-256
+- TLS 1.3 in transit for all API calls
+- Data residency: US-East-1 primary, EU-West-1 replication for GDPR
+- User data deletion within 30 days of account closure request
+- No health data shared with third-party advertisers — ever
+
+2.4 Platform Requirements
+- iOS 16+ and Android 12+ minimum supported versions
+- React Native 0.73+ with Expo SDK 50
+- Backend: Python 3.11+, FastAPI, Pydantic v2
+- Auth: AWS Cognito (OIDC + PKCE flow for mobile)
+- Push notifications: AWS SNS + APNs/FCM
+
+
+========================================================
+3. FEATURE REQUIREMENTS (MVP)
+========================================================
+
+3.1 User Onboarding
+- Social sign-in: Google, Apple (required for App Store)
+- Onboarding quiz: age, weight, height, fitness goal, dietary restrictions
+- Goal setting: lose weight / maintain / build muscle / improve sleep
+- BMI calculation and initial health score on first login
+
+3.2 Meal Logging
+- Barcode scanner for packaged food (Open Food Facts API)
+- Free-text food search with nutritional lookup
+- Custom meal creation and saving
+- Calorie, protein, carbs, fat, fiber tracking per meal
+- Water intake logging (glasses/ml)
+- Meal photo upload (S3) with optional AI calorie estimation
+
+3.3 Workout Tracking
+- Exercise library: 500+ exercises with muscle group tagging
+- Custom workout builder: sets, reps, weight, rest time
+- Cardio tracking: duration, distance, heart rate (manual entry or HealthKit/Google Fit)
+- Workout streak and personal record tracking
+- Shareable workout summaries
+
+3.4 Sleep Monitoring
+- Manual sleep log: bedtime, wake time, quality rating
+- Integration with Apple Health / Google Fit for auto-import
+- Sleep score calculation based on duration + consistency
+- Weekly sleep trend chart
+
+3.5 AI Recommendations Engine
+- Daily calorie target dynamically adjusted based on activity
+- Weekly insight cards: "You slept 2h less this week — recovery meals recommended"
+- Meal suggestions from logged preferences and macro gaps
+- Model: Fine-tuned LLaMA 3 8B served via AWS SageMaker endpoint
+- Inference latency target: < 800ms P95
+- Fallback: rule-based recommendations if AI endpoint unavailable
+
+3.6 Social & Gamification
+- Friends list and activity feed (opt-in)
+- Badges: 7-day streak, first 5KG lost, hydration hero, etc.
+- Weekly leaderboard (friends only, privacy-safe)
+- DEFERRED to Phase 2: public challenges, influencer partnerships
+
+
+========================================================
+4. NON-FUNCTIONAL REQUIREMENTS
+========================================================
+
+4.1 Security
+- OWASP Top 10 compliance mandatory before App Store submission
+- Penetration testing: annual, third-party vendor
+- Dependency vulnerability scanning in CI/CD (Snyk or Dependabot)
+- MFA optional for standard users; mandatory for admin accounts
+- Rate limiting: 100 req/min per user, 1000 req/min per IP
+
+4.2 Observability
+- Metrics: DataDog APM with custom health dashboard
+- Error tracking: Sentry with 1h SLA for P1 errors
+- Structured logging: JSON to CloudWatch Logs
+- Distributed tracing: OpenTelemetry → DataDog
+- SLO: 99.9% uptime (< 8.7h downtime/year)
+
+4.3 CI/CD
+- GitHub Actions pipeline: lint → test → build → deploy
+- Staging environment mirrors production (blue/green deploys)
+- Automated mobile builds: EAS Build (Expo)
+- Test coverage requirement: ≥ 80% backend, ≥ 70% frontend
+
+4.4 Accessibility
+- WCAG 2.1 AA compliance for web dashboard
+- Dynamic font sizes on mobile
+- VoiceOver / TalkBack support for core screens
+
+
+========================================================
+5. THIRD-PARTY INTEGRATIONS
+========================================================
+
+| Service            | Purpose                        | Tier       |
+|--------------------|-------------------------------|------------|
+| Open Food Facts    | Food nutrition database        | Free API   |
+| Stripe             | Subscription billing           | Pay-as-go  |
+| AWS Cognito        | Authentication                 | Managed     |
+| AWS S3             | Photo storage                  | Managed     |
+| AWS SageMaker      | AI recommendation inference    | On-demand   |
+| Apple HealthKit    | Sleep + workout auto-import    | Native SDK |
+| Google Fit         | Sleep + workout auto-import    | Native SDK |
+| DataDog            | Observability                  | Pro plan   |
+| Sentry             | Error tracking                 | Team plan  |
+| SendGrid           | Transactional email            | Essentials |
+| Twilio             | SMS alerts                     | Pay-as-go  |
+
+
+========================================================
+6. TEAM & TIMELINE
+========================================================
+
+Team: 4 engineers (2 backend, 1 mobile, 1 fullstack/infra)
+
+Sprint 1–2  (Weeks 1–4):  Auth, onboarding, meal logging MVP
+Sprint 3–4  (Weeks 5–8):  Workout tracking, sleep logging, S3 photos
+Sprint 5–6  (Weeks 9–12): AI recommendations, push notifications
+Sprint 7    (Weeks 13–14): QA, performance testing, App Store submission
+Sprint 8    (Weeks 15–16): Post-launch hardening, Phase 2 planning
+
+Hard deadline: App Store submission Week 14. No slip permitted.
+
+
+========================================================
+7. RISKS & MITIGATIONS
+========================================================
+
+RISK: Apple HealthKit approval (strict health data policies)
+MITIGATION: Submit privacy nutrition justification in App Store review notes.
+            Use "read-only" HealthKit access request in first submission.
+
+RISK: AI recommendation latency > 800ms
+MITIGATION: Pre-compute daily recommendations in background job (AWS Lambda).
+            Cache results in DynamoDB with 24h TTL.
+
+RISK: HIPAA audit failure pre-launch
+MITIGATION: Engage Coalfire for Business Associate Agreement review.
+            Encrypt all RDS columns containing health metrics.
+
+RISK: Barcode scanner accuracy on generic packaging
+MITIGATION: Manual barcode entry fallback.
+            User correction flow feeds back to Open Food Facts.
+
+
+========================================================
+8. SUCCESS METRICS (OKRs)
+========================================================
+
+O1: Launch a stable, loved MVP
+  KR1: Day-14 retention ≥ 35%
+  KR2: App Store rating ≥ 4.4 (minimum 500 ratings)
+  KR3: < 0.1% crash rate from Sentry in first 30 days
+
+O2: Validate monetization
+  KR1: Free-to-Pro conversion rate ≥ 4% in first 60 days
+  KR2: Monthly churn < 5% for Pro subscribers
+  KR3: LTV/CAC ratio ≥ 3.0
+
+O3: Build a scalable foundation
+  KR1: System handles 10x traffic spike without degradation
+  KR2: Deploy a hotfix in < 30 minutes using CI/CD pipeline
+  KR3: All P95 API latencies remain < 200ms under 5x normal load
+
+
+========================================================
+END OF DOCUMENT
+========================================================

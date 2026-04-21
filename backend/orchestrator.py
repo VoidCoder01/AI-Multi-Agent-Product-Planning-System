@@ -17,6 +17,8 @@ from agents import (
 )
 from orchestrator.graph import compile_planning_graph
 from utils.memory_store import MemoryStore
+from utils.reranker import LexicalOverlapReranker
+from utils.retriever import VectorRetriever
 
 logger = logging.getLogger(__name__)
 
@@ -35,6 +37,8 @@ class Orchestrator:
         self.scrum_agent = ScrumAgent()
         self.task_agent = TaskAgent()
         self._memory = MemoryStore()
+        self._retriever = VectorRetriever(top_k=6)
+        self._reranker = LexicalOverlapReranker()
         self._graph = compile_planning_graph(self)
 
     def mermaid_diagram(self) -> str:
@@ -59,11 +63,22 @@ class Orchestrator:
             "questions": questions,
             "user_input": product_idea,
             "session_id": session_id,
+            "clarify_round": 0,
+            "max_clarify_rounds": 2,
         }
         logger.info("Starting planning graph for idea length=%s", len(product_idea))
         final = self._graph.invoke(initial)
-        err = final.get("pipeline_error") or final.get("halt_reason")
+        return self._finalize_result(product_idea, final, session_id=session_id)
 
+    def _finalize_result(
+        self,
+        product_idea: str,
+        final: dict,
+        *,
+        session_id: str | None = None,
+    ) -> dict:
+        """Persist final graph state and shape consistent API response payload."""
+        err = final.get("pipeline_error") or final.get("halt_reason")
         payload_for_memory = {
             "product_idea": product_idea,
             "questions": final.get("questions") or [],
@@ -95,10 +110,81 @@ class Orchestrator:
             "task_feasibility": final.get("task_feasibility") or {},
             "tasks": final.get("tasks") or {},
             "final_validation": final.get("final_validation") or {},
+            "evaluation_scores": final.get("evaluation_scores") or {},
+            "rag_context": final.get("rag_context") or [],
             "error": err,
             "halt_reason": final.get("halt_reason"),
             "validation_errors": final.get("validation_errors") or [],
         }
+
+    def retrieve_context(
+        self,
+        query: str,
+        *,
+        session_id: str | None,
+        top_k: int = 4,
+    ) -> list[dict]:
+        """Retrieve and rerank chunks from session-level RAG index."""
+        if not session_id or not query.strip():
+            return []
+        payload = self._memory.load(session_id) or {}
+        rag = payload.get("rag") if isinstance(payload, dict) else None
+        if not isinstance(rag, dict):
+            return []
+        index = rag.get("index")
+        if not isinstance(index, list) or not index:
+            return []
+        candidates = self._retriever.retrieve(query, index, top_k=max(top_k * 2, 6))
+        reranked = self._reranker.rerank(query, candidates, top_k=top_k)
+        return reranked
+
+    def run_workflow_streaming(
+        self,
+        product_idea: str,
+        user_answers: dict,
+        questions: list[str] | None = None,
+        *,
+        session_id: str | None = None,
+    ):
+        """Yield per-node updates and final API payload from one graph execution."""
+        stage_messages = {
+            "clarify": "Analyzing product idea…",
+            "validate_qa": "Validating Q&A context…",
+            "requirement": "Generating project brief…",
+            "validate_brief": "Validating brief…",
+            "pm": "PM reviewing brief & writing PRD…",
+            "validate_prd": "Validating PRD…",
+            "architect": "Designing technical architecture…",
+            "validate_architecture": "Validating architecture…",
+            "scrum": "Creating epics and user stories…",
+            "task": "Breaking down tasks and subtasks…",
+            "final_validation": "Running final validation…",
+            "evaluate": "Scoring output quality…",
+            "retry_requirement": "Retrying brief generation…",
+            "retry_pm": "Retrying PRD generation…",
+            "halt": "Pipeline halted — validation failed.",
+        }
+        initial: dict = {
+            "product_idea": product_idea,
+            "user_answers": user_answers,
+            "questions": questions,
+            "user_input": product_idea,
+            "session_id": session_id,
+            "clarify_round": 0,
+            "max_clarify_rounds": 2,
+        }
+        final_state = dict(initial)
+        for event in self._graph.stream(initial, stream_mode="updates"):
+            for node_name, node_output in event.items():
+                if isinstance(node_output, dict):
+                    final_state.update(node_output)
+                msg = stage_messages.get(node_name, f"Processing {node_name}…")
+                yield (node_name, msg, node_output)
+        yield (
+            "complete",
+            "Workflow complete.",
+            self._finalize_result(product_idea, final_state, session_id=session_id),
+        )
 
     def save_to_files(
         self,

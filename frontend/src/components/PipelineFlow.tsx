@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState } from "react";
-import { Search, Brain, ClipboardList, Code, Bot } from "lucide-react";
+import { Search, Brain, ClipboardList, Code, Bot, Cpu, ShieldCheck } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { AgentNode, type AgentNodeState } from "@/components/AgentNode";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
@@ -21,19 +21,31 @@ const agents = [
     id: "pm",
     icon: ClipboardList,
     label: "PM",
-    description: "Produces the PRD: scope, requirements, metrics, and risks.",
+    description: "Reviews the brief, then produces the PRD: scope, requirements, metrics, and risks.",
+  },
+  {
+    id: "architect",
+    icon: Cpu,
+    label: "Architect",
+    description: "Designs the technical architecture: services, stack, data flow, and scalability.",
   },
   {
     id: "scrum",
     icon: Code,
     label: "Scrum",
-    description: "Breaks scope into epics and user stories with acceptance criteria.",
+    description: "Reviews the PRD, then breaks scope into epics and user stories with acceptance criteria.",
   },
   {
     id: "task",
     icon: Bot,
     label: "Tasks",
-    description: "Decomposes stories into engineering tasks ready for estimation.",
+    description: "Validates feasibility, then decomposes stories into engineering tasks.",
+  },
+  {
+    id: "validation",
+    icon: ShieldCheck,
+    label: "Validate",
+    description: "Runs cross-document consistency checks across all generated artifacts.",
   },
 ] as const;
 

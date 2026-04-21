@@ -27,7 +27,7 @@ export function TerminalHeader() {
           <div className="hidden items-center gap-2 rounded-full border border-white/[0.08] bg-white/[0.04] px-3 py-1.5 sm:flex">
             <Radio className="h-3.5 w-3.5 text-emerald-400" />
             <span className="text-[11px] font-medium uppercase tracking-[0.12em] text-muted-foreground">
-              5 agents live
+              7 agents live
             </span>
           </div>
           <div className="flex gap-1.5 opacity-80">

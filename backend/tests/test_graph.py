@@ -3,15 +3,16 @@
 from __future__ import annotations
 
 import json
+import os
 from unittest.mock import MagicMock, patch
 
 
-def _mock_response(text: str) -> MagicMock:
-    m = MagicMock()
-    b = MagicMock()
-    b.text = text
-    m.content = [b]
-    return m
+def _mock_openai_response(text: str) -> MagicMock:
+    mock_response = MagicMock()
+    mock_choice = MagicMock()
+    mock_choice.message.content = text
+    mock_response.choices = [mock_choice]
+    return mock_response
 
 
 MOCK_BRIEF = {
@@ -71,7 +72,7 @@ MOCK_ARCH = {
         "frontend": "React",
         "backend": "FastAPI",
         "data": "PostgreSQL",
-        "infra": "Docker",
+        "infra": "AWS",
     },
     "data_flow_textual": "Client -> API -> DB",
     "scalability_considerations": ["Horizontal scaling"],
@@ -133,8 +134,13 @@ MOCK_TASKS = {
     ]
 }
 
+MOCK_EVAL = {
+    "brief_eval": {"relevance_score": 8, "hallucination_score": 1, "feedback": "Good"},
+}
 
-@patch("agents.base.Anthropic")
+
+@patch.dict(os.environ, {"OPENROUTER_API_KEY": "test-key"})
+@patch("agents.base.OpenAI")
 def test_full_graph_pipeline(mock_cls):
     """End-to-end graph execution with mocked LLM responses."""
     mock_client = MagicMock()
@@ -149,8 +155,13 @@ def test_full_graph_pipeline(mock_cls):
         json.dumps(MOCK_EPICS),
         json.dumps(MOCK_FEASIBILITY),
         json.dumps(MOCK_TASKS),
+        # Evaluator makes up to 2 calls (brief + prd)
+        json.dumps(MOCK_EVAL),
+        json.dumps(MOCK_EVAL),
     ]
-    mock_client.messages.create.side_effect = [_mock_response(r) for r in responses]
+    mock_client.chat.completions.create.side_effect = [
+        _mock_openai_response(r) for r in responses
+    ]
 
     from backend.orchestrator import Orchestrator
 

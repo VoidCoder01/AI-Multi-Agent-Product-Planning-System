@@ -9,26 +9,26 @@ from unittest.mock import MagicMock, patch
 import pytest
 
 
-def _mock_anthropic_response(text: str) -> MagicMock:
+def _mock_openai_response(text: str) -> MagicMock:
     mock_response = MagicMock()
-    mock_block = MagicMock()
-    mock_block.text = text
-    mock_response.content = [mock_block]
+    mock_choice = MagicMock()
+    mock_choice.message.content = text
+    mock_response.choices = [mock_choice]
     return mock_response
 
 
 @pytest.fixture
-def mock_anthropic():
-    with patch.dict(os.environ, {"ANTHROPIC_API_KEY": "test-key"}):
-        with patch("agents.base.Anthropic") as mock_cls:
+def mock_openai():
+    with patch.dict(os.environ, {"OPENROUTER_API_KEY": "test-key"}):
+        with patch("agents.base.OpenAI") as mock_cls:
             mock_client = MagicMock()
             mock_cls.return_value = mock_client
             yield mock_client
 
 
 class TestClarificationAgent:
-    def test_ask_questions_returns_list(self, mock_anthropic):
-        mock_anthropic.messages.create.return_value = _mock_anthropic_response(
+    def test_ask_questions_returns_list(self, mock_openai):
+        mock_openai.chat.completions.create.return_value = _mock_openai_response(
             json.dumps(
                 [
                     "What users?",
@@ -47,8 +47,8 @@ class TestClarificationAgent:
         assert len(qs) >= 3
         assert all("?" in q for q in qs)
 
-    def test_ask_questions_fallback_on_bad_json(self, mock_anthropic):
-        mock_anthropic.messages.create.return_value = _mock_anthropic_response(
+    def test_ask_questions_fallback_on_bad_json(self, mock_openai):
+        mock_openai.chat.completions.create.return_value = _mock_openai_response(
             "This is not JSON at all"
         )
         from agents.clarification_agent import ClarificationAgent
@@ -60,7 +60,7 @@ class TestClarificationAgent:
 
 
 class TestRequirementAgent:
-    def test_create_project_brief(self, mock_anthropic):
+    def test_create_project_brief(self, mock_openai):
         brief = {
             "project_name": "FreelanceHub",
             "problem_statement": "Freelancers lack a unified marketplace.",
@@ -68,7 +68,7 @@ class TestRequirementAgent:
             "key_features": ["Profile creation", "Job matching", "Payments"],
             "constraints": "3-month MVP timeline",
         }
-        mock_anthropic.messages.create.return_value = _mock_anthropic_response(
+        mock_openai.chat.completions.create.return_value = _mock_openai_response(
             json.dumps(brief)
         )
         from agents.requirement_agent import RequirementAgent
@@ -80,7 +80,7 @@ class TestRequirementAgent:
 
 
 class TestPMAgent:
-    def test_review_and_prd(self, mock_anthropic):
+    def test_review_and_prd(self, mock_openai):
         review = {
             "strengths": ["Clear scope"],
             "gaps": ["Missing monetization"],
@@ -136,9 +136,9 @@ class TestPMAgent:
                 },
             ],
         }
-        mock_anthropic.messages.create.side_effect = [
-            _mock_anthropic_response(json.dumps(review)),
-            _mock_anthropic_response(json.dumps(prd)),
+        mock_openai.chat.completions.create.side_effect = [
+            _mock_openai_response(json.dumps(review)),
+            _mock_openai_response(json.dumps(prd)),
         ]
         from agents.pm_agent import PMAgent
 
@@ -150,7 +150,7 @@ class TestPMAgent:
 
 
 class TestScrumAgent:
-    def test_epics_and_stories(self, mock_anthropic):
+    def test_epics_and_stories(self, mock_openai):
         epics = {
             "epics": [
                 {
@@ -180,9 +180,9 @@ class TestScrumAgent:
             "recommended_changes": [],
             "validation_summary": "OK",
         }
-        mock_anthropic.messages.create.side_effect = [
-            _mock_anthropic_response(json.dumps(review)),
-            _mock_anthropic_response(json.dumps(epics)),
+        mock_openai.chat.completions.create.side_effect = [
+            _mock_openai_response(json.dumps(review)),
+            _mock_openai_response(json.dumps(epics)),
         ]
         from agents.scrum_agent import ScrumAgent
 
@@ -194,7 +194,7 @@ class TestScrumAgent:
 
 
 class TestArchitectAgent:
-    def test_create_architecture(self, mock_anthropic):
+    def test_create_architecture(self, mock_openai):
         arch = {
             "system_overview": "Microservices architecture...",
             "services": [
@@ -216,7 +216,7 @@ class TestArchitectAgent:
             "security_and_compliance": ["TLS everywhere"],
             "tradeoffs_made": ["Monolith-first approach"],
         }
-        mock_anthropic.messages.create.return_value = _mock_anthropic_response(
+        mock_openai.chat.completions.create.return_value = _mock_openai_response(
             json.dumps(arch)
         )
         from agents.architect_agent import ArchitectAgent

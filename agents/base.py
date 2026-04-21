@@ -1,4 +1,4 @@
-"""Anthropic client + audit logging for all agents."""
+"""OpenRouter/OpenAI client + audit logging for all agents."""
 
 from __future__ import annotations
 
@@ -7,25 +7,31 @@ import os
 import time
 from typing import Any
 
-from anthropic import Anthropic
+from openai import OpenAI
 
 from utils.agent_logger import log_agent_execution
+from utils.cache import CacheLayer
 from utils.runtime_config import get_llm_settings
 
 logger = logging.getLogger(__name__)
 
 
 class BaseAgent:
-    """Shared Claude client; subclasses set `audit_name`."""
+    """Shared OpenRouter client; subclasses set `audit_name`."""
 
     audit_name: str = "BASE_AGENT"
+    _cache = CacheLayer()  # shared across agents
 
     def __init__(self) -> None:
-        key = os.getenv("ANTHROPIC_API_KEY")
+        key = os.getenv("OPENROUTER_API_KEY") or os.getenv("open_router_api_key")
         if not key:
-            raise ValueError("ANTHROPIC_API_KEY is not set")
+            raise ValueError("OPENROUTER_API_KEY is not set")
         self._llm = get_llm_settings()
-        self.client = Anthropic(api_key=key, timeout=self._llm.timeout_sec)
+        self.client = OpenAI(
+            base_url="https://openrouter.ai/api/v1",
+            api_key=key,
+            timeout=self._llm.timeout_sec
+        )
         self.model = self._llm.model
 
     def call_llm(
@@ -44,18 +50,38 @@ class BaseAgent:
         cap_out = self._llm.log_output_max_chars
         max_retries = self._llm.max_retries
 
+        # Try cache
+        import hashlib
+        cache_key = hashlib.sha256(f"{self.model}:{system_prompt}:{user_message}".encode()).hexdigest()
+        cached = self._cache.get(cache_key)
+        if cached is not None:
+            extra = {"attempt": 0, "model": self.model}
+            if prompt_audit:
+                extra["prompt_audit"] = prompt_audit
+            log_agent_execution(
+                self.audit_name,
+                phase,
+                user_message[:cap_in],
+                cached[:cap_out],
+                status="cache_hit",
+                duration_ms=0,
+                extra=extra
+            )
+            return cached
+
         for attempt in range(max_retries + 1):
             last_attempt = attempt
             t0 = time.perf_counter()
             try:
-                response = self.client.messages.create(
+                response = self.client.chat.completions.create(
                     model=self.model,
                     max_tokens=max_tokens,
-                    system=system_prompt,
-                    messages=[{"role": "user", "content": user_message}],
+                    messages=[
+                        {"role": "system", "content": system_prompt},
+                        {"role": "user", "content": user_message}
+                    ],
                 )
-                block = response.content[0]
-                text = block.text if hasattr(block, "text") else str(block)
+                text = str(response.choices[0].message.content)
                 duration_ms = (time.perf_counter() - t0) * 1000.0
                 extra: dict[str, Any] = {"attempt": attempt, "model": self.model}
                 if prompt_audit:
@@ -69,6 +95,7 @@ class BaseAgent:
                     duration_ms=duration_ms,
                     extra=extra,
                 )
+                self._cache.set(cache_key, text, ttl=7200)
                 return text
             except Exception as e:
                 last_fail_duration_ms = (time.perf_counter() - t0) * 1000.0

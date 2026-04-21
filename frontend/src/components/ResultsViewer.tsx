@@ -14,13 +14,19 @@ const docSections = [
   { key: "project_brief", label: "Project Brief", agent: "requirement" },
   { key: "pm_brief_review", label: "PM ↔ Brief review", agent: "pm" },
   { key: "prd", label: "PRD", agent: "pm" },
-  { key: "architecture", label: "Technical architecture", agent: "master" },
+  { key: "architecture", label: "Technical Architecture", agent: "architect" },
   { key: "scrum_prd_review", label: "Scrum ↔ PRD review", agent: "scrum" },
   { key: "epics_stories", label: "Epics & Stories", agent: "scrum" },
   { key: "task_feasibility", label: "Feasibility review", agent: "task" },
   { key: "tasks", label: "Tasks", agent: "task" },
   { key: "final_validation", label: "Quality checks", agent: "master" },
 ];
+
+/** Keys returned by the backend that are NOT displayable artifacts */
+const INTERNAL_KEYS = new Set([
+  "session_id", "error", "halt_reason", "validation_errors",
+  "rag_context", "questions",
+]);
 
 function getContentString(value: unknown): string {
   return typeof value === "string" ? value : JSON.stringify(value, null, 2);
@@ -34,12 +40,15 @@ function getDescription(value: unknown): string {
 }
 
 export function ResultsViewer({ results }: ResultsViewerProps) {
-  const availableSections = docSections.filter((s) => results[s.key] !== undefined);
+  const visibleResults = Object.fromEntries(
+    Object.entries(results).filter(([k, v]) => !INTERNAL_KEYS.has(k) && v !== null && v !== undefined)
+  );
+  const availableSections = docSections.filter((s) => visibleResults[s.key] !== undefined);
 
   const sections =
     availableSections.length > 0
       ? availableSections
-      : Object.keys(results).map((key) => ({
+      : Object.keys(visibleResults).map((key) => ({
           key,
           label: key.replace(/_/g, " ").replace(/\b\w/g, (c) => c.toUpperCase()),
           agent: "master",
@@ -116,9 +125,9 @@ export function ResultsViewer({ results }: ResultsViewerProps) {
                   <ArtifactCard
                     key={section.key}
                     title={section.label}
-                    description={getDescription(results[section.key])}
+                    description={getDescription(visibleResults[section.key])}
                     agentKey={section.agent}
-                    content={getContentString(results[section.key])}
+                    content={getContentString(visibleResults[section.key])}
                     index={groupIdx * 10 + i}
                   />
                 ))}
@@ -146,9 +155,9 @@ export function ResultsViewer({ results }: ResultsViewerProps) {
                   <ArtifactCard
                     key={section.key}
                     title={section.label}
-                    description={getDescription(results[section.key])}
+                    description={getDescription(visibleResults[section.key])}
                     agentKey={section.agent}
-                    content={getContentString(results[section.key])}
+                    content={getContentString(visibleResults[section.key])}
                     index={80 + i}
                   />
                 ))}

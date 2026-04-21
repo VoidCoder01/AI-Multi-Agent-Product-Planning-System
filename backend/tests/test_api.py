@@ -2,26 +2,35 @@
 
 from __future__ import annotations
 
+import base64
+import os
 from unittest.mock import MagicMock, patch
 
 import pytest
 from fastapi.testclient import TestClient
 
 
+def _mock_openai_response(text: str) -> MagicMock:
+    mock_response = MagicMock()
+    mock_choice = MagicMock()
+    mock_choice.message.content = text
+    mock_response.choices = [mock_choice]
+    return mock_response
+
+
 @pytest.fixture
 def client():
-    with patch("agents.base.Anthropic") as mock_cls:
-        mock_client = MagicMock()
-        mock_cls.return_value = mock_client
-        mock_block = MagicMock()
-        mock_block.text = '["Q1?", "Q2?", "Q3?", "Q4?"]'
-        mock_response = MagicMock()
-        mock_response.content = [mock_block]
-        mock_client.messages.create.return_value = mock_response
+    with patch.dict(os.environ, {"OPENROUTER_API_KEY": "test-key"}):
+        with patch("agents.base.OpenAI") as mock_cls:
+            mock_client = MagicMock()
+            mock_cls.return_value = mock_client
+            mock_client.chat.completions.create.return_value = _mock_openai_response(
+                '["Q1?", "Q2?", "Q3?", "Q4?"]'
+            )
 
-        from backend.main import app
+            from backend.main import app
 
-        yield TestClient(app)
+            yield TestClient(app)
 
 
 def test_root(client: TestClient):
@@ -33,6 +42,9 @@ def test_root(client: TestClient):
 def test_health(client: TestClient):
     r = client.get("/health")
     assert r.status_code == 200
+    data = r.json()
+    assert data["status"] == "ok"
+    assert data["api_key_configured"] is True
 
 
 def test_questions_endpoint(client: TestClient):
@@ -46,3 +58,17 @@ def test_questions_endpoint(client: TestClient):
 def test_questions_empty_idea_rejected(client: TestClient):
     r = client.post("/api/questions", json={"product_idea": ""})
     assert r.status_code == 422
+
+
+def test_upload_txt_document_creates_rag_index(client: TestClient):
+    encoded = base64.b64encode(b"roadmap priorities for Q3 and dependency risks").decode("ascii")
+    r = client.post(
+        "/api/upload",
+        json={"filename": "notes.txt", "content_base64": encoded},
+    )
+    assert r.status_code == 200
+    body = r.json()
+    assert "session_id" in body
+    assert body["document"]["filename"] == "notes.txt"
+    assert body["document"]["chunk_count"] >= 1
+    assert body["index_size"] >= 1

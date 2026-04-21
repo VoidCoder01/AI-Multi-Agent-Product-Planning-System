@@ -1,13 +1,15 @@
 import { cn } from "@/lib/utils";
-import { Bot, Brain, ClipboardList, Code, Search, Zap } from "lucide-react";
+import { Bot, Brain, ClipboardList, Code, Search, Zap, Cpu, ShieldCheck } from "lucide-react";
 
 const agentConfig: Record<string, { icon: typeof Bot; label: string; color: string }> = {
   master: { icon: Zap, label: "ORCHESTRATOR", color: "text-primary" },
   clarification: { icon: Search, label: "CLARIFIER", color: "text-accent" },
   requirement: { icon: Brain, label: "ANALYST", color: "text-primary" },
   pm: { icon: ClipboardList, label: "PM AGENT", color: "text-accent" },
-  scrum: { icon: Code, label: "SCRUM AGENT", color: "text-primary" },
-  task: { icon: Bot, label: "TASK AGENT", color: "text-accent" },
+  architect: { icon: Cpu, label: "ARCHITECT", color: "text-primary" },
+  scrum: { icon: Code, label: "SCRUM AGENT", color: "text-accent" },
+  task: { icon: Bot, label: "TASK AGENT", color: "text-primary" },
+  evaluator: { icon: ShieldCheck, label: "EVALUATOR", color: "text-accent" },
 };
 
 interface AgentBadgeProps {

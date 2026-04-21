@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { motion, AnimatePresence } from "framer-motion";
-import { Send, Sparkles, ArrowLeft, Command } from "lucide-react";
+import { Send, Sparkles, ArrowLeft, Command, Paperclip, Loader2 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Textarea } from "@/components/ui/textarea";
 import { TerminalHeader } from "@/components/TerminalHeader";
@@ -62,6 +62,12 @@ const PIPELINE_TRACE = [
     run: "Crafting the PRD…",
   },
   {
+    agent: "Architect Agent",
+    done: "Technical architecture designed",
+    detail: "Services, stack, data flow, and scalability documented.",
+    run: "Designing technical architecture…",
+  },
+  {
     agent: "Scrum Master",
     done: "Epics and user stories created",
     detail: "Backlog items with acceptance criteria.",
@@ -73,9 +79,15 @@ const PIPELINE_TRACE = [
     detail: "Tasks ready for estimation and sprint planning.",
     run: "Decomposing into tasks…",
   },
+  {
+    agent: "Orchestrator",
+    done: "Cross-document validation passed",
+    detail: "Consistency checks across all artifacts complete.",
+    run: "Running final validation…",
+  },
 ] as const;
 
-const PIPELINE_MINI_LABELS = ["Clarifier", "Analyst", "PM", "Scrum", "Tasks"] as const;
+const PIPELINE_MINI_LABELS = ["Clarifier", "Analyst", "PM", "Architect", "Scrum", "Tasks", "Validate"] as const;
 
 function truncate(s: string, max: number) {
   const t = s.trim();
@@ -93,6 +105,10 @@ const pageTransition = {
 export default function Index() {
   const [step, setStep] = useState(1);
   const [productIdea, setProductIdea] = useState("");
+  const [sessionId, setSessionId] = useState<string | null>(null);
+  const [uploadedFiles, setUploadedFiles] = useState<{doc_id: string, filename: string}[]>([]);
+  const [isUploading, setIsUploading] = useState(false);
+  const fileInputRef = useRef<HTMLInputElement>(null);
   const [questions, setQuestions] = useState<string[]>([]);
   const [answers, setAnswers] = useState<Record<string, string>>({});
   const [results, setResults] = useState<Record<string, unknown> | null>(null);
@@ -107,7 +123,7 @@ export default function Index() {
   const prevGeneratePhase = useRef(0);
 
   const pipelineStates: AgentNodeState[] = useMemo(() => {
-    const n = 5;
+    const n = 7;
     const out: AgentNodeState[] = Array(n).fill("idle") as AgentNodeState[];
     if (step === 3) return Array(n).fill("completed") as AgentNodeState[];
     if (step === 2 && !loading) {
@@ -256,6 +272,56 @@ export default function Index() {
     if (step !== 3) genFinalized.current = false;
   }, [step]);
 
+  const handleFileUpload = async (e: React.ChangeEvent<HTMLInputElement>) => {
+    const file = e.target.files?.[0];
+    if (!file) return;
+    if (e.target) e.target.value = '';
+    
+    setIsUploading(true);
+    setError("");
+    
+    try {
+      const reader = new FileReader();
+      reader.onload = async (event) => {
+        try {
+          const base64Data = (event.target?.result as string).split(',')[1];
+          const res = await fetch("/api/upload", {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({
+              filename: file.name,
+              content_base64: base64Data,
+              session_id: sessionId
+            })
+          });
+          
+          if (!res.ok) throw new Error(await parseError(res));
+          
+          const data = await res.json();
+          setSessionId(data.session_id);
+          setUploadedFiles(prev => [...prev, data.document]);
+          appendLog({
+            agent: "System",
+            message: "Document uploaded",
+            status: "completed",
+            durationMs: 300,
+            detail: `Indexed ${data.document.chunk_count} chunks from ${data.document.filename}`,
+            inputSummary: truncate(data.document.filename, 100),
+            outputSummary: "RAG index updated",
+          });
+        } catch (err) {
+          setError(err instanceof Error ? err.message : String(err));
+        } finally {
+          setIsUploading(false);
+        }
+      };
+      reader.readAsDataURL(file);
+    } catch (err) {
+      setError(err instanceof Error ? err.message : String(err));
+      setIsUploading(false);
+    }
+  };
+
   const handleGetQuestions = useCallback(async () => {
     setError("");
     const idea = productIdea.trim();
@@ -320,7 +386,7 @@ export default function Index() {
       const res = await fetch("/api/generate", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ product_idea: productIdea.trim(), answers, questions }),
+        body: JSON.stringify({ product_idea: productIdea.trim(), answers, questions, session_id: sessionId }),
       });
       if (!res.ok) throw new Error(await parseError(res));
       const data = await res.json();
@@ -387,6 +453,8 @@ export default function Index() {
     setQuestions([]);
     setAnswers({});
     setResults(null);
+    setSessionId(null);
+    setUploadedFiles([]);
     setError("");
     setTraceLogs([]);
     setTraceRunning(null);
@@ -496,6 +564,20 @@ export default function Index() {
                           placeholder="Example: A B2B marketplace connecting verified freelancers with teams, with escrow, real-time chat, and milestone-based payouts…"
                           className="min-h-[260px] resize-y border-0 bg-transparent px-4 py-3 text-[15px] leading-relaxed text-[#E5E7EB]/95 placeholder:text-muted-foreground/50 focus-visible:ring-0"
                         />
+                        <div className="flex items-center gap-2 px-3 pb-2 pt-1 border-t border-white/[0.05]">
+                          <input type="file" ref={fileInputRef} onChange={handleFileUpload} className="hidden" accept=".pdf,.txt" />
+                          <Button type="button" variant="ghost" size="sm" onClick={() => fileInputRef.current?.click()} disabled={isUploading || loading} className="h-8 gap-1.5 px-2 text-muted-foreground hover:text-foreground">
+                            {isUploading ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <Paperclip className="h-3.5 w-3.5" />}
+                            <span className="text-xs">{isUploading ? 'Uploading...' : 'Attach PDF/TXT Context'}</span>
+                          </Button>
+                          <div className="flex flex-wrap gap-1.5 overflow-hidden flex-1">
+                            {uploadedFiles.map(f => (
+                              <div key={f.doc_id} className="flex items-center gap-1 max-w-[150px] rounded bg-white/[0.06] px-1.5 py-0.5 text-[10px] text-muted-foreground border border-white/[0.04]">
+                                <span className="truncate">{f.filename}</span>
+                              </div>
+                            ))}
+                          </div>
+                        </div>
                       </div>
                       <div className="flex flex-wrap gap-2">
                         <span className="mr-1 w-full text-[11px] font-medium uppercase tracking-[0.1em] text-muted-foreground sm:w-auto sm:mr-2">
@@ -601,10 +683,10 @@ export default function Index() {
           <StatusBar
             stage={stage}
             progress={progressPct}
-            agentsOnline={5}
+            agentsOnline={7}
             phaseName={phaseName}
             completedAgents={completedAgents}
-            totalAgents={5}
+            totalAgents={7}
             miniSteps={miniSteps}
             className="sm:flex-col sm:items-stretch sm:justify-start"
           />

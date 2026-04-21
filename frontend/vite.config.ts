@@ -5,8 +5,7 @@ import { componentTagger } from "lovable-tagger";
 
 // https://vitejs.dev/config/
 export default defineConfig(({ mode }) => {
-  // In Docker dev, point this to backend service (e.g., http://backend:8000)
-  // while keeping localhost default for non-container local dev.
+  // Keep localhost default for local development; can be overridden by env.
   const apiProxyTarget =
     process.env.VITE_API_PROXY_TARGET || "http://127.0.0.1:8000";
 
