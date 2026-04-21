@@ -15,3 +15,5 @@ data/planning_memory/
 .cursorrules
 .env.example\
 venv/
+venv/
+.env.example
