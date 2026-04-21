@@ -13,4 +13,5 @@ logs/*.jsonl
 data/planning_memory/
 .DS_Store
 .cursorrules
-.env.example
+.env.example\
+venv/
