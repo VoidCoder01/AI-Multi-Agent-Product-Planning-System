@@ -29,6 +29,7 @@ class BaseAgent:
         if not key:
             raise ValueError("Set OPENAI_API_KEY or OPENROUTER_API_KEY")
         self._llm = get_llm_settings()
+        resolved_model = self._llm.model
         kwargs: dict[str, Any] = {
             "api_key": key,
             "timeout": self._llm.timeout_sec,
@@ -36,8 +37,21 @@ class BaseAgent:
         # Route via OpenRouter only when OpenRouter key is used.
         if openrouter_key and not openai_key:
             kwargs["base_url"] = "https://openrouter.ai/api/v1"
+        elif (
+            openai_key
+            and not os.getenv("OPENAI_MODEL")
+            and ("/" in resolved_model or ":" in resolved_model)
+        ):
+            # Guardrail: OpenRouter slugs are invalid on native OpenAI endpoints.
+            resolved_model = "gpt-4o-mini"
+            logger.warning(
+                "OPENAI_API_KEY detected with non-OpenAI model slug '%s'; "
+                "falling back to '%s'. Set OPENAI_MODEL to override.",
+                self._llm.model,
+                resolved_model,
+            )
         self.client = OpenAI(**kwargs)
-        self.model = self._llm.model
+        self.model = resolved_model
 
     def call_llm(
         self,

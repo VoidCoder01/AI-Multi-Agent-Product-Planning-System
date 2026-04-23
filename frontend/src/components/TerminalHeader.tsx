@@ -1,7 +1,11 @@
 import { motion } from "framer-motion";
 import { Layers, Radio } from "lucide-react";
 
-export function TerminalHeader() {
+type TerminalHeaderProps = {
+  backendOnline: boolean;
+};
+
+export function TerminalHeader({ backendOnline }: TerminalHeaderProps) {
   return (
     <motion.header
       initial={{ opacity: 0, y: -8 }}
@@ -25,9 +29,9 @@ export function TerminalHeader() {
         </div>
         <div className="flex items-center gap-3 sm:gap-5">
           <div className="hidden items-center gap-2 rounded-full border border-white/[0.08] bg-white/[0.04] px-3 py-1.5 sm:flex">
-            <Radio className="h-3.5 w-3.5 text-emerald-400" />
+            <Radio className={`h-3.5 w-3.5 ${backendOnline ? "text-emerald-400" : "text-rose-400"}`} />
             <span className="text-[11px] font-medium uppercase tracking-[0.12em] text-muted-foreground">
-              7 agents live
+              {backendOnline ? "agents online" : "backend offline"}
             </span>
           </div>
           <div className="flex gap-1.5 opacity-80">

@@ -103,6 +103,7 @@ const pageTransition = {
 };
 
 export default function Index() {
+  const [backendOnline, setBackendOnline] = useState(true);
   const [step, setStep] = useState(1);
   const [productIdea, setProductIdea] = useState("");
   const [sessionId, setSessionId] = useState<string | null>(null);
@@ -468,6 +469,31 @@ export default function Index() {
   }, []);
 
   useEffect(() => {
+    let mounted = true;
+
+    const checkBackendHealth = async () => {
+      try {
+        const res = await fetch("/api/health");
+        if (!mounted) return;
+        setBackendOnline(res.ok);
+      } catch {
+        if (!mounted) return;
+        setBackendOnline(false);
+      }
+    };
+
+    void checkBackendHealth();
+    const interval = window.setInterval(() => {
+      void checkBackendHealth();
+    }, 5000);
+
+    return () => {
+      mounted = false;
+      window.clearInterval(interval);
+    };
+  }, []);
+
+  useEffect(() => {
     const onKey = (e: KeyboardEvent) => {
       if (!(e.metaKey || e.ctrlKey) || e.key !== "Enter") return;
       e.preventDefault();
@@ -486,7 +512,7 @@ export default function Index() {
       <div className="pointer-events-none fixed inset-0 grid-bg-animated opacity-40" aria-hidden />
       <CursorGlow />
 
-      <TerminalHeader />
+      <TerminalHeader backendOnline={backendOnline} />
 
       <div className="relative z-10 w-full flex-1 px-4 py-6 sm:px-6 lg:px-10 lg:py-8">
         <div className="mx-auto flex w-full max-w-7xl flex-col gap-6 lg:flex-row lg:items-start lg:gap-8">
@@ -683,7 +709,7 @@ export default function Index() {
           <StatusBar
             stage={stage}
             progress={progressPct}
-            agentsOnline={7}
+            agentsOnline={backendOnline ? 7 : 0}
             phaseName={phaseName}
             completedAgents={completedAgents}
             totalAgents={7}
