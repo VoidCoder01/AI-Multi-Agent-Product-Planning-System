@@ -2,7 +2,7 @@
 
 Multi-agent orchestration: a user provides a product idea, the system asks clarifying questions, then **collaborating agents** produce structured artifacts — **project brief**, **PRD**, **epics**, **user stories**, **tasks**, and **subtasks**.
 
-**Stack:** Python 3.11+, **FastAPI**, **OpenRouter** (Claude / any model), **LangGraph** (graph workflow).
+**Stack:** Python 3.11+, **FastAPI**, **OpenAI-compatible SDK** (native OpenAI or OpenRouter), **LangGraph** (graph workflow).
 
 ---
 
@@ -10,7 +10,7 @@ Multi-agent orchestration: a user provides a product idea, the system asks clari
 
 ```bash
 cp .env.example .env
-# Add your OPENROUTER_API_KEY to .env
+# Add OPENAI_API_KEY (or OPENROUTER_API_KEY) to .env
 docker compose up --build
 # API Docs: http://localhost:8000/docs
 ```
@@ -82,7 +82,8 @@ docker compose up --build
 ## Phase 1 — RAG Foundation
 
 ### Document Upload (`POST /api/upload`)
-Upload a PDF/TXT file to inject domain knowledge into the pipeline.
+Upload a PDF/TXT/audio file (`.txt`, `.pdf`, `.mp3`, `.wav`, `.m4a`, `.webm`) to inject domain knowledge into the pipeline.
+Audio uploads are auto-transcribed with Whisper first, then chunked/indexed like text documents.
 
 ### Embeddings & Retrieval
 > **Design decision**: We use deterministic hash-based embeddings and lexical reranking instead of neural models (sentence-transformers, OpenAI embeddings). This is a deliberate MVP tradeoff: zero external dependencies, deterministic results, sub-millisecond latency. For production, swap in `text-embedding-3-small` and a cross-encoder reranker.
@@ -127,18 +128,20 @@ Upload a PDF/TXT file to inject domain knowledge into the pipeline.
 | `POST` | `/api/questions` | Generate clarification questions |
 | `POST` | `/api/generate` | Run full planning pipeline synchronously |
 | `POST` | `/api/generate/stream` | Run with live SSE progress streaming |
-| `POST` | `/api/upload` | Upload PDF/TXT for RAG context |
+| `POST` | `/api/upload` | Upload PDF/TXT/audio for RAG context (audio uses Whisper transcription) |
 | `GET`  | `/api/sessions` | List saved sessions |
 | `GET`  | `/api/sessions/{id}` | Load session artifacts |
 | `GET`  | `/api/workflow/diagram` | Mermaid graph of LangGraph pipeline |
-| `GET`  | `/health` | API system and OPENROUTER_API_KEY status |
+| `GET`  | `/health` | API system and provider API key status |
 
 ---
 
 ## Testing & Verification
 
 ```bash
-# 1. Run local environment
+
+# 1. activate virtual environment and Run local environment
+source venv/bin/activate
 pip install -r requirements.txt
 pip install -r requirements-dev.txt
 
@@ -148,6 +151,19 @@ uvicorn backend.main:app
 # 3. Run Pytest Suite (tests use mocked OpenAI responses)
 pytest backend/tests/ -v
 ```
+# Frontend (Vite + React)
+
+**Project docs:** [../README.md](../README.md) (architecture, setup, API).
+
+## Commands
+
+```bash
+npm install
+npm run dev    # http://localhost:8080/ui/ — proxies /api → FastAPI :8000
+npm run build  # dist/ served by FastAPI at http://127.0.0.1:8000/ui/
+```
+
+`base` is `/ui` to match the FastAPI static mount.
 
 ---
 

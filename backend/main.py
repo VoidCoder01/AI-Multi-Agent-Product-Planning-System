@@ -18,6 +18,7 @@ from uuid import uuid4
 from dotenv import load_dotenv
 from fastapi import FastAPI, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
+from openai import OpenAI
 from fastapi.responses import JSONResponse, StreamingResponse
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel
@@ -109,10 +110,52 @@ def _extract_document_text(filename: str, content: bytes) -> str:
         return content.decode("utf-8", errors="ignore").strip()
     if ext == ".pdf":
         return _extract_text_from_pdf(content)
+    if ext in {".mp3", ".wav", ".m4a", ".webm"}:
+        return _transcribe_audio_with_whisper(filename, content)
     raise HTTPException(
         status_code=400,
-        detail="Unsupported file type. Upload .txt or .pdf files only.",
+        detail="Unsupported file type. Upload .txt, .pdf, .mp3, .wav, .m4a, or .webm files only.",
     )
+
+
+def _transcribe_audio_with_whisper(filename: str, content: bytes) -> str:
+    """Transcribe uploaded audio using Whisper via OpenAI-compatible SDK."""
+    openai_key = os.getenv("OPENAI_API_KEY") or os.getenv("openai_api_key")
+    openrouter_key = os.getenv("OPENROUTER_API_KEY") or os.getenv("open_router_api_key")
+    api_key = openai_key or openrouter_key
+    if not api_key:
+        raise HTTPException(
+            status_code=500,
+            detail="OPENAI_API_KEY or OPENROUTER_API_KEY is required for audio transcription.",
+        )
+    model = os.getenv("WHISPER_MODEL", "whisper-1")
+    client_kwargs = {
+        "api_key": api_key,
+        "timeout": float(os.getenv("WHISPER_TIMEOUT_SEC", "120")),
+    }
+    if openrouter_key and not openai_key:
+        client_kwargs["base_url"] = "https://openrouter.ai/api/v1"
+        model = os.getenv("WHISPER_MODEL", "openai/whisper-1")
+    client = OpenAI(**client_kwargs)
+    audio_file = io.BytesIO(content)
+    audio_file.name = filename
+    try:
+        transcription = client.audio.transcriptions.create(
+            model=model,
+            file=audio_file,
+        )
+    except Exception as exc:
+        raise HTTPException(
+            status_code=500,
+            detail=f"Audio transcription failed: {type(exc).__name__}: {exc}",
+        ) from exc
+    text = str(getattr(transcription, "text", "") or "").strip()
+    if not text:
+        raise HTTPException(
+            status_code=400,
+            detail="Transcription returned empty text. Please upload clearer audio.",
+        )
+    return text
 
 
 @app.get("/")
@@ -126,7 +169,12 @@ def root():
 
 @app.get("/health")
 def health():
-    has_key = bool(os.getenv("OPENROUTER_API_KEY") or os.getenv("open_router_api_key"))
+    has_key = bool(
+        os.getenv("OPENAI_API_KEY")
+        or os.getenv("openai_api_key")
+        or os.getenv("OPENROUTER_API_KEY")
+        or os.getenv("open_router_api_key")
+    )
     return {"status": "ok" if has_key else "degraded", "api_key_configured": has_key}
 
 
@@ -230,7 +278,7 @@ async def generate_stream(request: GenerateBody):
 @app.post("/api/upload", responses={500: {"model": ErrorResponse}})
 async def upload_document(request: UploadDocumentBody):
     """
-    Upload a TXT/PDF document, chunk it, embed it, and store in session memory.
+    Upload TXT/PDF/audio, chunk it, embed it, and store in session memory.
     """
     if not request.filename:
         raise HTTPException(status_code=400, detail="Missing filename in upload request.")
@@ -247,7 +295,7 @@ async def upload_document(request: UploadDocumentBody):
     if not text:
         raise HTTPException(
             status_code=400,
-            detail="Could not extract text from document. Please upload a text-based PDF/TXT.",
+            detail="Could not extract text from document. Please upload a supported text/PDF/audio file.",
         )
 
     source = request.filename

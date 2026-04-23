@@ -20,12 +20,16 @@ def _mock_openai_response(text: str) -> MagicMock:
 
 @pytest.fixture
 def client():
-    with patch.dict(os.environ, {"OPENROUTER_API_KEY": "test-key"}):
-        with patch("agents.base.OpenAI") as mock_cls:
+    with patch.dict(os.environ, {"OPENAI_API_KEY": "test-key"}, clear=False):
+        with patch("agents.base.OpenAI") as mock_cls, patch("backend.main.OpenAI") as api_openai_cls:
             mock_client = MagicMock()
             mock_cls.return_value = mock_client
+            api_openai_cls.return_value = mock_client
             mock_client.chat.completions.create.return_value = _mock_openai_response(
                 '["Q1?", "Q2?", "Q3?", "Q4?"]'
+            )
+            mock_client.audio.transcriptions.create.return_value = MagicMock(
+                text="Meeting notes about Q3 roadmap and integration dependencies."
             )
 
             from backend.main import app
@@ -72,3 +76,17 @@ def test_upload_txt_document_creates_rag_index(client: TestClient):
     assert body["document"]["filename"] == "notes.txt"
     assert body["document"]["chunk_count"] >= 1
     assert body["index_size"] >= 1
+
+
+def test_upload_audio_document_transcribes_and_indexes(client: TestClient):
+    encoded = base64.b64encode(b"fake audio bytes").decode("ascii")
+    r = client.post(
+        "/api/upload",
+        json={"filename": "meeting.mp3", "content_base64": encoded},
+    )
+    assert r.status_code == 200
+    body = r.json()
+    assert "session_id" in body
+    assert body["document"]["filename"] == "meeting.mp3"
+    assert body["document"]["char_count"] > 0
+    assert body["document"]["chunk_count"] >= 1

@@ -40,7 +40,7 @@ def _env_float(name: str, default: float, *, min_value: float = 0.0) -> float:
 
 @dataclass(frozen=True)
 class LLMSettings:
-    """OpenRouter-backed LLM client + retry behavior."""
+    """OpenAI-compatible LLM client + retry behavior."""
 
     model: str
     max_retries: int
@@ -61,7 +61,13 @@ def get_llm_settings() -> LLMSettings:
     max_retries: extra attempts after the first failure (total calls = max_retries + 1).
     """
     return LLMSettings(
-        model=_env_str("OPENROUTER_MODEL", _env_str("ANTHROPIC_MODEL", "openrouter/free")),
+        model=_env_str(
+            "OPENAI_MODEL",
+            _env_str(
+                "OPENROUTER_MODEL",
+                _env_str("ANTHROPIC_MODEL", "gpt-4o-mini"),
+            ),
+        ),
         max_retries=max(0, _env_int("LLM_MAX_RETRIES", 2, min_value=0)),
         retry_backoff_base_sec=_env_float(
             "LLM_RETRY_BACKOFF_BASE_SEC", 0.6, min_value=0.0

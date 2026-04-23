@@ -17,21 +17,26 @@ logger = logging.getLogger(__name__)
 
 
 class BaseAgent:
-    """Shared OpenRouter client; subclasses set `audit_name`."""
+    """Shared OpenAI-compatible client; subclasses set `audit_name`."""
 
     audit_name: str = "BASE_AGENT"
     _cache = CacheLayer()  # shared across agents
 
     def __init__(self) -> None:
-        key = os.getenv("OPENROUTER_API_KEY") or os.getenv("open_router_api_key")
+        openai_key = os.getenv("OPENAI_API_KEY") or os.getenv("openai_api_key")
+        openrouter_key = os.getenv("OPENROUTER_API_KEY") or os.getenv("open_router_api_key")
+        key = openai_key or openrouter_key
         if not key:
-            raise ValueError("OPENROUTER_API_KEY is not set")
+            raise ValueError("Set OPENAI_API_KEY or OPENROUTER_API_KEY")
         self._llm = get_llm_settings()
-        self.client = OpenAI(
-            base_url="https://openrouter.ai/api/v1",
-            api_key=key,
-            timeout=self._llm.timeout_sec
-        )
+        kwargs: dict[str, Any] = {
+            "api_key": key,
+            "timeout": self._llm.timeout_sec,
+        }
+        # Route via OpenRouter only when OpenRouter key is used.
+        if openrouter_key and not openai_key:
+            kwargs["base_url"] = "https://openrouter.ai/api/v1"
+        self.client = OpenAI(**kwargs)
         self.model = self._llm.model
 
     def call_llm(
