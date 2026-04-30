@@ -111,7 +111,7 @@ Audio uploads are auto-transcribed with Whisper first, then chunked/indexed like
 ### Known Limitations
 - RAG uses lightweight hash-based embeddings (not neural) — see Design Decisions.
 - No persistent database — sessions stored as JSON files.
-- Frontend not included in this submission (API-first design).
+- Auth is token-based via `API_BEARER_TOKEN` and should be replaced by enterprise SSO/JWT/RBAC.
 
 ### Future Work
 - Neural embeddings (OpenAI `text-embedding-3-small`).
@@ -133,6 +133,28 @@ Audio uploads are auto-transcribed with Whisper first, then chunked/indexed like
 | `GET`  | `/api/sessions/{id}` | Load session artifacts |
 | `GET`  | `/api/workflow/diagram` | Mermaid graph of LangGraph pipeline |
 | `GET`  | `/health` | API system and provider API key status |
+
+---
+
+## Security and Enterprise Configuration
+
+- **Authentication**:
+  - Preferred: JWT bearer tokens via `JWT_SECRET` (`HS256` by default).
+  - Legacy fallback: static bearer token via `API_BEARER_TOKEN`.
+  - If neither is configured, API auth is disabled for local development.
+  - Optional runtime toggle: set `AUTH_MODE_TOGGLE_ENABLED=true` to allow `/api/admin/auth-mode` switching between `enforced` and `none`.
+- **Authorization (RBAC)**:
+  - Supported roles/scopes: `planner:read`, `planner:generate`, `planner:readwrite`, `admin`.
+  - `admin` can access all sessions; non-admin users are scoped to their own session data.
+- **CORS**:
+  - Controlled by `ALLOWED_ORIGINS` (comma-separated).
+  - Wildcard origin automatically disables credentialed CORS behavior.
+- **Session persistence**:
+  - `SESSION_STORE_BACKEND=file` (default local JSON files).
+  - `SESSION_STORE_BACKEND=postgres` + `DATABASE_URL` for PostgreSQL-backed persistence.
+- **Security/quality gates in CI**:
+  - Python lint/tests + Bandit SAST + `pip-audit`.
+  - Frontend lint/test/build + `npm audit` (high severity threshold).
 
 ---
 

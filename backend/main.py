@@ -16,12 +16,12 @@ from pathlib import Path
 from uuid import uuid4
 
 from dotenv import load_dotenv
-from fastapi import FastAPI, HTTPException
+from fastapi import FastAPI, HTTPException, Request
 from fastapi.middleware.cors import CORSMiddleware
 from openai import OpenAI
 from fastapi.responses import JSONResponse, StreamingResponse
 from fastapi.staticfiles import StaticFiles
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
 
 # Load .env from repo root and backend/
 _ROOT = Path(__file__).resolve().parent.parent
@@ -35,13 +35,21 @@ logging.basicConfig(
     level=logging.INFO,
     format="%(asctime)s %(levelname)s %(name)s %(message)s",
 )
+logger = logging.getLogger(__name__)
 
 from backend.orchestrator import Orchestrator
+from backend.security import (
+    AuthContext,
+    authenticate_request,
+    get_configured_auth_mode,
+    require_roles,
+)
 from schemas.models import GenerateBody, ProductIdeaBody
 from utils.chunking import chunk_text
 from utils.embeddings import build_vector_index
 
 _orchestrator: Orchestrator | None = None
+_auth_mode_override: str | None = None
 
 
 def get_orchestrator() -> Orchestrator:
@@ -57,10 +65,33 @@ app = FastAPI(
     version="1.0.0",
 )
 
+
+def _parse_allowed_origins() -> tuple[list[str], bool]:
+    """
+    Build CORS origins from ALLOWED_ORIGINS env.
+
+    Defaults to localhost origins for safer local development behavior.
+    """
+    raw = os.getenv("ALLOWED_ORIGINS")
+    if raw:
+        origins = [origin.strip() for origin in raw.split(",") if origin.strip()]
+    else:
+        origins = [
+            "http://localhost:3000",
+            "http://localhost:5173",
+            "http://127.0.0.1:3000",
+            "http://127.0.0.1:5173",
+            "http://localhost:8080",
+            "http://127.0.0.1:8080",
+        ]
+    wildcard_enabled = "*" in origins
+    return origins, wildcard_enabled
+
+_allowed_origins, _wildcard_cors = _parse_allowed_origins()
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["*"],
-    allow_credentials=True,
+    allow_origins=_allowed_origins,
+    allow_credentials=not _wildcard_cors,
     allow_methods=["*"],
     allow_headers=["*"],
 )
@@ -79,12 +110,42 @@ class ErrorResponse(BaseModel):
     error: str
     detail: str | None = None
     stage: str | None = None
+    request_id: str | None = None
 
 
 class UploadDocumentBody(BaseModel):
     filename: str
     content_base64: str
     session_id: str | None = None
+
+
+class AuthModeBody(BaseModel):
+    mode: str = Field(pattern="^(none|enforced)$")
+
+
+def _auth_from_request(request: Request) -> AuthContext | None:
+    auth = getattr(request.state, "auth", None)
+    if isinstance(auth, AuthContext):
+        return auth
+    return None
+
+
+def _auth_toggle_enabled() -> bool:
+    return os.getenv("AUTH_MODE_TOGGLE_ENABLED", "false").strip().lower() in {
+        "1",
+        "true",
+        "yes",
+        "on",
+    }
+
+
+def _effective_auth_mode() -> str:
+    if _auth_mode_override in {"none", "enforced"}:
+        return _auth_mode_override
+    configured = get_configured_auth_mode()
+    if configured == "none":
+        return "none"
+    return "enforced"
 
 
 def _extract_text_from_pdf(content: bytes) -> str:
@@ -183,55 +244,116 @@ def api_health():
     return health()
 
 
+@app.middleware("http")
+async def api_security_middleware(request: Request, call_next):
+    if request.url.path.startswith("/api/") and request.url.path != "/api/health":
+        if _effective_auth_mode() == "enforced":
+            try:
+                request.state.auth = authenticate_request(request)
+            except HTTPException as exc:
+                return JSONResponse(
+                    status_code=exc.status_code,
+                    content={"error": "unauthorized", "detail": str(exc.detail)},
+                )
+        else:
+            request.state.auth = None
+    return await call_next(request)
+
+
+@app.get("/api/admin/auth-mode")
+def get_auth_mode(http_request: Request):
+    auth = _auth_from_request(http_request)
+    if _effective_auth_mode() == "enforced":
+        require_roles(auth, {"admin"})
+    return {
+        "mode": _effective_auth_mode(),
+        "configured_mode": get_configured_auth_mode(),
+        "toggle_enabled": _auth_toggle_enabled(),
+    }
+
+
+@app.post("/api/admin/auth-mode")
+def set_auth_mode(body: AuthModeBody, http_request: Request):
+    if not _auth_toggle_enabled():
+        raise HTTPException(status_code=403, detail="Auth mode toggle is disabled.")
+
+    auth = _auth_from_request(http_request)
+    if _effective_auth_mode() == "enforced":
+        require_roles(auth, {"admin"})
+
+    global _auth_mode_override
+    _auth_mode_override = body.mode
+    logger.warning("Auth mode override set to %s", body.mode)
+    return {
+        "mode": _effective_auth_mode(),
+        "configured_mode": get_configured_auth_mode(),
+        "toggle_enabled": _auth_toggle_enabled(),
+    }
+
+
 @app.exception_handler(Exception)
-async def global_exception_handler(_request, exc: Exception):
+async def global_exception_handler(request: Request, exc: Exception):
+    request_id = str(uuid4())
+    logger.exception(
+        "Unhandled server exception request_id=%s path=%s",
+        request_id,
+        request.url.path,
+        exc_info=exc,
+    )
     return JSONResponse(
         status_code=500,
-        content={"error": type(exc).__name__, "detail": str(exc)},
+        content={
+            "error": "internal_server_error",
+            "detail": "An unexpected error occurred.",
+            "request_id": request_id,
+        },
     )
 
 
 @app.post("/api/questions", responses={500: {"model": ErrorResponse}})
-def get_questions(request: ProductIdeaBody):
+def get_questions(request: ProductIdeaBody, http_request: Request):
+    auth = _auth_from_request(http_request)
+    require_roles(auth, {"planner:generate", "planner:readwrite"})
     try:
         questions = get_orchestrator().clarification_agent.ask_questions(
             request.product_idea
         )
         return {"questions": questions}
-    except Exception as e:
+    except Exception as exc:
+        logger.exception("Question generation failed", exc_info=exc)
         raise HTTPException(
             status_code=500,
-            detail={
-                "error": type(e).__name__,
-                "message": str(e),
-                "stage": "clarification",
-            },
-        ) from e
+            detail="Failed to generate clarification questions.",
+        ) from exc
 
 
 @app.post("/api/generate", responses={500: {"model": ErrorResponse}})
-def generate_documentation(request: GenerateBody):
+def generate_documentation(request: GenerateBody, http_request: Request):
+    auth = _auth_from_request(http_request)
+    require_roles(auth, {"planner:generate", "planner:readwrite"})
     try:
+        owner_id = auth.subject if auth and not auth.is_admin else None
         return get_orchestrator().run_workflow(
             request.product_idea,
             request.answers,
             questions=request.questions,
             session_id=request.session_id,
+            owner_id=owner_id,
         )
-    except Exception as e:
+    except Exception as exc:
+        logger.exception("Workflow generation failed", exc_info=exc)
         raise HTTPException(
             status_code=500,
-            detail={
-                "error": type(e).__name__,
-                "message": str(e),
-                "stage": "workflow_generation",
-            },
-        ) from e
+            detail="Failed to generate planning artifacts.",
+        ) from exc
 
 
 @app.post("/api/generate/stream")
-async def generate_stream(request: GenerateBody):
+async def generate_stream(request: GenerateBody, http_request: Request):
     """Stream real per-node workflow progress as server-sent events."""
+    auth = _auth_from_request(http_request)
+    require_roles(auth, {"planner:generate", "planner:readwrite"})
+    owner_id = auth.subject if auth and not auth.is_admin else None
 
     async def event_stream():
         import queue
@@ -248,6 +370,7 @@ async def generate_stream(request: GenerateBody):
                     request.answers,
                     questions=request.questions,
                     session_id=request.session_id,
+                    owner_id=owner_id,
                 ):
                     if node_name == "complete":
                         q.put({"stage": "complete", "status": "done", "result": node_output})
@@ -276,10 +399,14 @@ async def generate_stream(request: GenerateBody):
 
 
 @app.post("/api/upload", responses={500: {"model": ErrorResponse}})
-async def upload_document(request: UploadDocumentBody):
+async def upload_document(request: UploadDocumentBody, http_request: Request):
     """
     Upload TXT/PDF/audio, chunk it, embed it, and store in session memory.
     """
+    auth = _auth_from_request(http_request)
+    require_roles(auth, {"planner:generate", "planner:readwrite"})
+    owner_id = auth.subject if auth and not auth.is_admin else None
+
     if not request.filename:
         raise HTTPException(status_code=400, detail="Missing filename in upload request.")
 
@@ -291,11 +418,24 @@ async def upload_document(request: UploadDocumentBody):
             detail="Invalid base64 content. Encode your file bytes using base64 before upload.",
         ) from exc
 
+    max_upload_bytes = int(os.getenv("MAX_UPLOAD_BYTES", str(10 * 1024 * 1024)))
+    if len(content) > max_upload_bytes:
+        raise HTTPException(
+            status_code=413,
+            detail=f"Uploaded file exceeds MAX_UPLOAD_BYTES ({max_upload_bytes}).",
+        )
+
     text = _extract_document_text(request.filename, content)
     if not text:
         raise HTTPException(
             status_code=400,
             detail="Could not extract text from document. Please upload a supported text/PDF/audio file.",
+        )
+    max_document_chars = int(os.getenv("MAX_DOCUMENT_CHARS", "250000"))
+    if len(text) > max_document_chars:
+        raise HTTPException(
+            status_code=413,
+            detail=f"Extracted text exceeds MAX_DOCUMENT_CHARS ({max_document_chars}).",
         )
 
     source = request.filename
@@ -303,7 +443,11 @@ async def upload_document(request: UploadDocumentBody):
     indexed = build_vector_index(chunks)
 
     orch = get_orchestrator()
-    payload = orch._memory.load(request.session_id) if request.session_id else None
+    payload = (
+        orch._memory.load(request.session_id, owner_id=owner_id)
+        if request.session_id
+        else None
+    )
     if not isinstance(payload, dict):
         payload = {}
     rag = payload.get("rag")
@@ -334,12 +478,19 @@ async def upload_document(request: UploadDocumentBody):
     raw_documents[doc_id] = text
     index.extend(indexed)
 
+    max_index_items = int(os.getenv("MAX_SESSION_INDEX_ITEMS", "4000"))
+    if len(index) > max_index_items:
+        raise HTTPException(
+            status_code=413,
+            detail=f"Session index size exceeds MAX_SESSION_INDEX_ITEMS ({max_index_items}).",
+        )
+
     rag["documents"] = documents
     rag["raw_documents"] = raw_documents
     rag["index"] = index
     payload["rag"] = rag
 
-    sid = orch._memory.save(payload, session_id=request.session_id)
+    sid = orch._memory.save(payload, session_id=request.session_id, owner_id=owner_id)
     return {
         "session_id": sid,
         "document": {
@@ -353,19 +504,27 @@ async def upload_document(request: UploadDocumentBody):
 
 
 @app.get("/api/workflow/diagram")
-def workflow_diagram():
+def workflow_diagram(http_request: Request):
     """Return a Mermaid diagram for the current workflow graph."""
+    auth = _auth_from_request(http_request)
+    require_roles(auth, {"planner:read", "planner:readwrite"})
     return {"mermaid": get_orchestrator().mermaid_diagram()}
 
 
 @app.get("/api/sessions/{session_id}")
-def get_session(session_id: str):
-    data = get_orchestrator()._memory.load(session_id)
+def get_session(session_id: str, http_request: Request):
+    auth = _auth_from_request(http_request)
+    require_roles(auth, {"planner:read", "planner:readwrite"})
+    owner_id = None if auth and auth.is_admin else (auth.subject if auth else None)
+    data = get_orchestrator()._memory.load(session_id, owner_id=owner_id)
     if data is None:
         raise HTTPException(status_code=404, detail="Session not found")
     return data
 
 
 @app.get("/api/sessions")
-def list_sessions():
-    return {"sessions": get_orchestrator()._memory.list_sessions()}
+def list_sessions(http_request: Request):
+    auth = _auth_from_request(http_request)
+    require_roles(auth, {"planner:read", "planner:readwrite"})
+    owner_id = None if auth and auth.is_admin else (auth.subject if auth else None)
+    return {"sessions": get_orchestrator()._memory.list_sessions(owner_id=owner_id)}

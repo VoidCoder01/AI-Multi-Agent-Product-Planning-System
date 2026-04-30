@@ -1,11 +1,20 @@
 import { motion } from "framer-motion";
 import { Layers, Radio } from "lucide-react";
+import { Switch } from "@/components/ui/switch";
 
 type TerminalHeaderProps = {
   backendOnline: boolean;
+  authEnabled: boolean;
+  authToggleDisabled?: boolean;
+  onToggleAuth: (next: boolean) => void;
 };
 
-export function TerminalHeader({ backendOnline }: TerminalHeaderProps) {
+export function TerminalHeader({
+  backendOnline,
+  authEnabled,
+  authToggleDisabled = false,
+  onToggleAuth,
+}: TerminalHeaderProps) {
   return (
     <motion.header
       initial={{ opacity: 0, y: -8 }}
@@ -28,6 +37,20 @@ export function TerminalHeader({ backendOnline }: TerminalHeaderProps) {
           </div>
         </div>
         <div className="flex items-center gap-3 sm:gap-5">
+          <div className="hidden items-center gap-2 rounded-full border border-white/[0.08] bg-white/[0.04] px-3 py-1.5 sm:flex">
+            <span className="text-[11px] font-medium uppercase tracking-[0.12em] text-muted-foreground">
+              auth
+            </span>
+            <Switch
+              checked={authEnabled}
+              disabled={authToggleDisabled}
+              onCheckedChange={onToggleAuth}
+              aria-label="Toggle authentication mode"
+            />
+            <span className="text-[11px] font-medium uppercase tracking-[0.12em] text-muted-foreground">
+              {authEnabled ? "enabled" : "disabled"}
+            </span>
+          </div>
           <div className="hidden items-center gap-2 rounded-full border border-white/[0.08] bg-white/[0.04] px-3 py-1.5 sm:flex">
             <Radio className={`h-3.5 w-3.5 ${backendOnline ? "text-emerald-400" : "text-rose-400"}`} />
             <span className="text-[11px] font-medium uppercase tracking-[0.12em] text-muted-foreground">

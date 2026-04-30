@@ -104,6 +104,9 @@ const pageTransition = {
 
 export default function Index() {
   const [backendOnline, setBackendOnline] = useState(true);
+  const [authEnabled, setAuthEnabled] = useState(false);
+  const [authToggleEnabled, setAuthToggleEnabled] = useState(false);
+  const [authToken, setAuthToken] = useState<string>(() => localStorage.getItem("authToken") || "");
   const [step, setStep] = useState(1);
   const [productIdea, setProductIdea] = useState("");
   const [sessionId, setSessionId] = useState<string | null>(null);
@@ -122,6 +125,20 @@ export default function Index() {
   const clarifyStartRef = useRef(0);
   const genFinalized = useRef(false);
   const prevGeneratePhase = useRef(0);
+
+  const apiFetch = useCallback(
+    (url: string, init: RequestInit = {}) => {
+      const headers = new Headers(init.headers || {});
+      if (!headers.has("Content-Type") && init.body) {
+        headers.set("Content-Type", "application/json");
+      }
+      if (authEnabled && authToken.trim()) {
+        headers.set("Authorization", `Bearer ${authToken.trim()}`);
+      }
+      return fetch(url, { ...init, headers });
+    },
+    [authEnabled, authToken],
+  );
 
   const pipelineStates: AgentNodeState[] = useMemo(() => {
     const n = 7;
@@ -286,9 +303,8 @@ export default function Index() {
       reader.onload = async (event) => {
         try {
           const base64Data = (event.target?.result as string).split(',')[1];
-          const res = await fetch("/api/upload", {
+          const res = await apiFetch("/api/upload", {
             method: "POST",
-            headers: { "Content-Type": "application/json" },
             body: JSON.stringify({
               filename: file.name,
               content_base64: base64Data,
@@ -338,9 +354,8 @@ export default function Index() {
       inputSummary: truncate(productIdea, 120),
     });
     try {
-      const res = await fetch("/api/questions", {
+      const res = await apiFetch("/api/questions", {
         method: "POST",
-        headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ product_idea: idea }),
       });
       if (!res.ok) throw new Error(await parseError(res));
@@ -366,7 +381,7 @@ export default function Index() {
     } finally {
       setLoading(false);
     }
-  }, [productIdea, appendLog]);
+  }, [productIdea, appendLog, apiFetch]);
 
   const handleGenerate = useCallback(async () => {
     setError("");
@@ -384,9 +399,8 @@ export default function Index() {
       inputSummary: ctx,
     });
     try {
-      const res = await fetch("/api/generate", {
+      const res = await apiFetch("/api/generate", {
         method: "POST",
-        headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ product_idea: productIdea.trim(), answers, questions, session_id: sessionId }),
       });
       if (!res.ok) throw new Error(await parseError(res));
@@ -417,7 +431,7 @@ export default function Index() {
       setLoading(false);
       setGeneratePhase(0);
     }
-  }, [productIdea, answers, questions]);
+  }, [productIdea, answers, questions, sessionId, apiFetch]);
 
   const downloadJson = useCallback(() => {
     if (!results) return;
@@ -471,11 +485,26 @@ export default function Index() {
   useEffect(() => {
     let mounted = true;
 
+    const loadAuthMode = async () => {
+      try {
+        const res = await apiFetch("/api/admin/auth-mode");
+        if (!res.ok) return;
+        const data = await res.json();
+        if (!mounted) return;
+        setAuthEnabled(data.mode === "enforced");
+        setAuthToggleEnabled(Boolean(data.toggle_enabled));
+      } catch {
+        if (!mounted) return;
+        setAuthToggleEnabled(false);
+      }
+    };
+
     const checkBackendHealth = async () => {
       try {
         const res = await fetch("/api/health");
         if (!mounted) return;
         setBackendOnline(res.ok);
+        if (res.ok) await loadAuthMode();
       } catch {
         if (!mounted) return;
         setBackendOnline(false);
@@ -491,7 +520,30 @@ export default function Index() {
       mounted = false;
       window.clearInterval(interval);
     };
-  }, []);
+  }, [apiFetch]);
+
+  const handleToggleAuth = useCallback(
+    async (next: boolean) => {
+      if (!authToggleEnabled) return;
+      setError("");
+      try {
+        const res = await apiFetch("/api/admin/auth-mode", {
+          method: "POST",
+          body: JSON.stringify({ mode: next ? "enforced" : "none" }),
+        });
+        if (!res.ok) throw new Error(await parseError(res));
+        const data = await res.json();
+        setAuthEnabled(data.mode === "enforced");
+      } catch (e: unknown) {
+        setError(e instanceof Error ? e.message : String(e));
+      }
+    },
+    [apiFetch, authToggleEnabled],
+  );
+
+  useEffect(() => {
+    localStorage.setItem("authToken", authToken);
+  }, [authToken]);
 
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => {
@@ -512,7 +564,14 @@ export default function Index() {
       <div className="pointer-events-none fixed inset-0 grid-bg-animated opacity-40" aria-hidden />
       <CursorGlow />
 
-      <TerminalHeader backendOnline={backendOnline} />
+      <TerminalHeader
+        backendOnline={backendOnline}
+        authEnabled={authEnabled}
+        authToggleDisabled={!authToggleEnabled}
+        onToggleAuth={(next) => {
+          void handleToggleAuth(next);
+        }}
+      />
 
       <div className="relative z-10 w-full flex-1 px-4 py-6 sm:px-6 lg:px-10 lg:py-8">
         <div className="mx-auto flex w-full max-w-7xl flex-col gap-6 lg:flex-row lg:items-start lg:gap-8">
@@ -621,6 +680,12 @@ export default function Index() {
                         ))}
                       </div>
                       <div className="flex flex-wrap items-center gap-3 pt-1">
+                        <input
+                          value={authToken}
+                          onChange={(e) => setAuthToken(e.target.value)}
+                          placeholder="Bearer token (required when auth enabled)"
+                          className="h-11 min-w-[280px] flex-1 rounded-xl border border-white/[0.1] bg-black/20 px-3 text-sm text-[#E5E7EB]/95 placeholder:text-muted-foreground/60 focus:outline-none focus:ring-1 focus:ring-primary/40"
+                        />
                         <Button
                           onClick={() => void handleGetQuestions()}
                           size="lg"

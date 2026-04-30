@@ -16,7 +16,7 @@ from agents import (
     TaskAgent,
 )
 from orchestrator.graph import compile_planning_graph
-from utils.memory_store import MemoryStore
+from utils.memory_store import SessionStore, create_session_store
 from utils.reranker import LexicalOverlapReranker
 from utils.retriever import VectorRetriever
 
@@ -36,7 +36,7 @@ class Orchestrator:
         self.architect_agent = ArchitectAgent()
         self.scrum_agent = ScrumAgent()
         self.task_agent = TaskAgent()
-        self._memory = MemoryStore()
+        self._memory: SessionStore = create_session_store()
         self._retriever = VectorRetriever(top_k=6)
         self._reranker = LexicalOverlapReranker()
         self._graph = compile_planning_graph(self)
@@ -52,6 +52,7 @@ class Orchestrator:
         questions: list[str] | None = None,
         *,
         session_id: str | None = None,
+        owner_id: str | None = None,
     ) -> dict:
         """
         Run the LangGraph pipeline. Pass the same `questions` as /api/questions
@@ -68,7 +69,12 @@ class Orchestrator:
         }
         logger.info("Starting planning graph for idea length=%s", len(product_idea))
         final = self._graph.invoke(initial)
-        return self._finalize_result(product_idea, final, session_id=session_id)
+        return self._finalize_result(
+            product_idea,
+            final,
+            session_id=session_id,
+            owner_id=owner_id,
+        )
 
     def _finalize_result(
         self,
@@ -76,6 +82,7 @@ class Orchestrator:
         final: dict,
         *,
         session_id: str | None = None,
+        owner_id: str | None = None,
     ) -> dict:
         """Persist final graph state and shape consistent API response payload."""
         err = final.get("pipeline_error") or final.get("halt_reason")
@@ -96,7 +103,7 @@ class Orchestrator:
             "validation_errors": final.get("validation_errors"),
             "saved_at": datetime.now(timezone.utc).isoformat(),
         }
-        sid = self._memory.save(payload_for_memory, session_id=session_id)
+        sid = self._memory.save(payload_for_memory, session_id=session_id, owner_id=owner_id)
 
         return {
             "session_id": sid,
@@ -122,12 +129,13 @@ class Orchestrator:
         query: str,
         *,
         session_id: str | None,
+        owner_id: str | None = None,
         top_k: int = 4,
     ) -> list[dict]:
         """Retrieve and rerank chunks from session-level RAG index."""
         if not session_id or not query.strip():
             return []
-        payload = self._memory.load(session_id) or {}
+        payload = self._memory.load(session_id, owner_id=owner_id) or {}
         rag = payload.get("rag") if isinstance(payload, dict) else None
         if not isinstance(rag, dict):
             return []
@@ -145,6 +153,7 @@ class Orchestrator:
         questions: list[str] | None = None,
         *,
         session_id: str | None = None,
+        owner_id: str | None = None,
     ):
         """Yield per-node updates and final API payload from one graph execution."""
         stage_messages = {
@@ -170,6 +179,7 @@ class Orchestrator:
             "questions": questions,
             "user_input": product_idea,
             "session_id": session_id,
+            "owner_id": owner_id,
             "clarify_round": 0,
             "max_clarify_rounds": 2,
         }
@@ -183,7 +193,12 @@ class Orchestrator:
         yield (
             "complete",
             "Workflow complete.",
-            self._finalize_result(product_idea, final_state, session_id=session_id),
+            self._finalize_result(
+                product_idea,
+                final_state,
+                session_id=session_id,
+                owner_id=owner_id,
+            ),
         )
 
     def save_to_files(
