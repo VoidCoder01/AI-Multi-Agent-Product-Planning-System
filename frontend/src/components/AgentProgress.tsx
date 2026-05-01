@@ -5,6 +5,8 @@ export interface AgentProgressProps {
   onPhaseChange?: (index: number) => void;
   /** Pauses simulated phase rotation and tips (UI-only). */
   paused?: boolean;
+  /** When provided, overrides the timer-driven phase with the real SSE stage index. */
+  forcedPhaseIndex?: number;
 }
 
 const PHASES = [
@@ -81,8 +83,10 @@ const ROTATING_TIPS = [
 const PHASE_MS = 12_000;
 const TIP_MS = 8_000;
 
-export function AgentProgress({ onPhaseChange, paused = false }: AgentProgressProps) {
-  const [currentPhaseIndex, setCurrentPhaseIndex] = useState(0);
+export function AgentProgress({ onPhaseChange, paused = false, forcedPhaseIndex }: AgentProgressProps) {
+  const isControlled = forcedPhaseIndex !== undefined;
+  const [timerPhaseIndex, setTimerPhaseIndex] = useState(0);
+  const currentPhaseIndex = isControlled ? Math.min(forcedPhaseIndex, PHASES.length - 1) : timerPhaseIndex;
   const [tipIndex, setTipIndex] = useState(0);
 
   useEffect(() => {
@@ -90,14 +94,14 @@ export function AgentProgress({ onPhaseChange, paused = false }: AgentProgressPr
   }, [currentPhaseIndex, onPhaseChange]);
 
   useEffect(() => {
-    if (paused) return;
+    if (paused || isControlled) return;
     const interval = setInterval(() => {
-      setCurrentPhaseIndex((prev) =>
+      setTimerPhaseIndex((prev) =>
         prev < PHASES.length - 1 ? prev + 1 : prev
       );
     }, PHASE_MS);
     return () => clearInterval(interval);
-  }, [paused]);
+  }, [paused, isControlled]);
 
   useEffect(() => {
     if (paused) return;

@@ -169,6 +169,122 @@ class Orchestrator:
         reranked = self._reranker.rerank(query, candidates, top_k=top_k)
         return reranked
 
+    # ------------------------------------------------------------------
+    # Human-in-the-loop streaming: start → (interrupt) → resume
+    # ------------------------------------------------------------------
+
+    _STAGE_MESSAGES: dict[str, str] = {
+        "clarify": "Analyzing product idea…",
+        "validate_qa": "Validating Q&A context…",
+        "requirement": "Generating project brief…",
+        "validate_brief": "Validating brief…",
+        "pm": "PM reviewing brief & writing PRD…",
+        "validate_prd": "Validating PRD…",
+        "architect": "Designing technical architecture…",
+        "validate_architecture": "Validating architecture…",
+        "scrum": "Creating epics and user stories…",
+        "task": "Breaking down tasks and subtasks…",
+        "final_validation": "Running final validation…",
+        "evaluate": "Scoring output quality…",
+        "retry_requirement": "Retrying brief generation…",
+        "retry_pm": "Retrying PRD generation…",
+        "halt": "Pipeline halted — validation failed.",
+    }
+
+    def start_workflow_stream(
+        self,
+        product_idea: str,
+        *,
+        session_id: str | None = None,
+        owner_id: str | None = None,
+        on_chunk: object = None,
+    ):
+        """Start the graph, stream clarify-node events, then yield an interrupt
+        event containing the generated questions and the thread_id needed to resume."""
+        from agents.base import _stream_cb  # noqa: PLC0415
+        if on_chunk is not None:
+            _stream_cb.fn = on_chunk
+        else:
+            _stream_cb.fn = None  # type: ignore[assignment]
+
+        thread_id = str(uuid4())
+        initial: dict = {
+            "product_idea": product_idea,
+            "user_answers": {},
+            "questions": None,
+            "user_input": product_idea,
+            "session_id": session_id,
+            "owner_id": owner_id,
+            "clarify_round": 0,
+            "max_clarify_rounds": 2,
+        }
+        run_cfg = self._run_config(thread_id)
+        for event in self._graph.stream(initial, config=run_cfg, stream_mode="updates"):
+            for node_name, node_output in event.items():
+                msg = self._STAGE_MESSAGES.get(node_name, f"Processing {node_name}…")
+                yield (node_name, msg, node_output)
+
+        # Graph paused at interrupt — read the questions from the checkpoint.
+        state = self._graph.get_state(run_cfg)
+        questions = (state.values or {}).get("questions") or []
+        yield ("interrupt", "Clarification needed.", {"thread_id": thread_id, "questions": questions})
+
+    def resume_workflow_stream(
+        self,
+        thread_id: str,
+        user_answers: dict,
+        questions: list[str],
+        *,
+        session_id: str | None = None,
+        owner_id: str | None = None,
+        on_chunk: object = None,
+        product_idea: str = "",
+    ):
+        """Resume the graph after the user has answered the clarification questions."""
+        from agents.base import _stream_cb  # noqa: PLC0415
+        if on_chunk is not None:
+            _stream_cb.fn = on_chunk
+        else:
+            _stream_cb.fn = None  # type: ignore[assignment]
+
+        run_cfg = self._run_config(thread_id)
+        # Recompute qa_pairs with the real answers — node_clarify already ran with
+        # empty user_answers (before the interrupt), so its qa_pairs is stale.
+        qa_pairs = [
+            (questions[i], str(user_answers.get(f"q{i + 1}", "")))
+            for i in range(len(questions))
+        ]
+        self._graph.update_state(
+            run_cfg,
+            {"user_answers": user_answers, "questions": questions, "qa_pairs": qa_pairs},
+        )
+
+        final_state: dict = {}
+        for event in self._graph.stream(None, config=run_cfg, stream_mode="updates"):
+            for node_name, node_output in event.items():
+                if isinstance(node_output, dict):
+                    final_state.update(node_output)
+                msg = self._STAGE_MESSAGES.get(node_name, f"Processing {node_name}…")
+                yield (node_name, msg, node_output)
+
+        # Read full final state from checkpoint for _finalize_result.
+        state = self._graph.get_state(run_cfg)
+        merged = dict(state.values or {})
+        merged.update(final_state)
+        if not product_idea:
+            product_idea = merged.get("product_idea", "")
+        yield (
+            "complete",
+            "Workflow complete.",
+            self._finalize_result(
+                product_idea,
+                merged,
+                session_id=session_id,
+                owner_id=owner_id,
+                langgraph_thread_id=thread_id,
+            ),
+        )
+
     def run_workflow_streaming(
         self,
         product_idea: str,

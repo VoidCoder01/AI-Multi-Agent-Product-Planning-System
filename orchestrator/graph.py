@@ -383,4 +383,6 @@ def compile_planning_graph(orch: Orchestrator, *, checkpointer: object):
     g.add_edge("evaluate", END)
     g.add_edge("halt", END)
 
-    return g.compile(checkpointer=checkpointer)
+    # interrupt_after=["clarify"] pauses the graph after questions are generated
+    # so the frontend can present them to the user and collect answers before resuming.
+    return g.compile(checkpointer=checkpointer, interrupt_after=["clarify"])

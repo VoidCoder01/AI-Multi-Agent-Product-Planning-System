@@ -63,19 +63,25 @@ def get_llm_settings() -> LLMSettings:
     """
     provider = _env_str("LLM_PROVIDER", "anthropic").lower()
     if provider == "anthropic":
-        default_model = _env_str("ANTHROPIC_MODEL", "claude-sonnet-4-6")
+        default_model = os.getenv("ANTHROPIC_MODEL", "").strip()
     elif provider == "openrouter":
-        default_model = _env_str("OPENROUTER_MODEL", "anthropic/claude-3.5-sonnet")
+        default_model = os.getenv("OPENROUTER_MODEL", "").strip()
     elif provider == "openai":
-        default_model = _env_str("OPENAI_MODEL", "gpt-4o-mini")
+        default_model = os.getenv("OPENAI_MODEL", "").strip()
+    elif provider == "gemini":
+        default_model = os.getenv("GEMINI_MODEL", "").strip()
     else:
-        # auto mode keeps backward compatibility while preferring Claude-family defaults.
-        default_model = _env_str(
-            "ANTHROPIC_MODEL",
-            _env_str(
-                "OPENROUTER_MODEL",
-                _env_str("OPENAI_MODEL", "claude-sonnet-4-6"),
-            ),
+        # auto: use whichever model env var is set, preferring Anthropic first.
+        default_model = (
+            os.getenv("ANTHROPIC_MODEL", "").strip()
+            or os.getenv("GEMINI_MODEL", "").strip()
+            or os.getenv("OPENAI_MODEL", "").strip()
+            or os.getenv("OPENROUTER_MODEL", "").strip()
+        )
+    if not default_model:
+        raise ValueError(
+            f"No model configured for provider '{provider}'. "
+            f"Set the corresponding *_MODEL env var (e.g. OPENROUTER_MODEL) in your .env file."
         )
     return LLMSettings(
         provider=provider,

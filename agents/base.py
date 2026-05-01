@@ -4,8 +4,15 @@ from __future__ import annotations
 
 import logging
 import os
+import threading
 import time
+from collections.abc import Callable
 from typing import Any
+
+# Thread-local slot for a streaming chunk callback.
+# The SSE endpoint sets this before running the graph so every agent call
+# inside that thread can forward tokens back to the queue.
+_stream_cb: threading.local = threading.local()
 
 from anthropic import Anthropic
 from openai import OpenAI
@@ -31,23 +38,24 @@ class BaseAgent:
         get_llm_settings.cache_clear()
         self._llm = get_llm_settings()
         provider = self._llm.provider
+        gemini_key = os.getenv("GEMINI_API_KEY") or os.getenv("gemini_api_key")
         if provider == "auto":
             if anthropic_key:
                 provider = "anthropic"
+            elif gemini_key:
+                provider = "gemini"
             elif openrouter_key:
                 provider = "openrouter"
             elif openai_key:
                 provider = "openai"
             else:
-                provider = "anthropic"
+                provider = "openrouter"  # fall back to OpenRouter free tier
         self.provider = provider
         resolved_model = self._llm.model
         if self.provider == "anthropic":
             if not anthropic_key:
                 raise ValueError("LLM_PROVIDER=anthropic requires ANTHROPIC_API_KEY")
             self.client = Anthropic(api_key=anthropic_key, timeout=self._llm.timeout_sec)
-            if not os.getenv("ANTHROPIC_MODEL"):
-                resolved_model = "claude-sonnet-4-6"
         elif self.provider == "openrouter":
             if not openrouter_key:
                 raise ValueError("LLM_PROVIDER=openrouter requires OPENROUTER_API_KEY")
@@ -64,8 +72,16 @@ class BaseAgent:
                     "OPENAI_MODEL must be a native OpenAI model when LLM_PROVIDER=openai."
                 )
             self.client = OpenAI(api_key=openai_key, timeout=self._llm.timeout_sec)
+        elif self.provider == "gemini":
+            if not gemini_key:
+                raise ValueError("LLM_PROVIDER=gemini requires GEMINI_API_KEY")
+            self.client = OpenAI(
+                api_key=gemini_key,
+                base_url="https://generativelanguage.googleapis.com/v1beta/openai/",
+                timeout=self._llm.timeout_sec,
+            )
         else:
-            raise ValueError("LLM_PROVIDER must be one of: anthropic, openrouter, openai, auto")
+            raise ValueError("LLM_PROVIDER must be one of: anthropic, openrouter, openai, gemini, auto")
         self.model = resolved_model
 
     def _create_completion(
@@ -74,8 +90,27 @@ class BaseAgent:
         system_prompt: str,
         user_message: str,
         max_tokens: int,
+        on_chunk: Callable[[str], None] | None = None,
     ) -> str:
-        if self.provider in {"openai", "openrouter"}:
+        """Non-streaming or streaming completion depending on `on_chunk`."""
+        if self.provider in {"openai", "openrouter", "gemini"}:
+            if on_chunk:
+                full = ""
+                stream = self.client.chat.completions.create(
+                    model=self.model,
+                    max_tokens=max_tokens,
+                    messages=[
+                        {"role": "system", "content": system_prompt},
+                        {"role": "user", "content": user_message},
+                    ],
+                    stream=True,
+                )
+                for chunk in stream:
+                    delta = (chunk.choices[0].delta.content or "") if chunk.choices else ""
+                    if delta:
+                        full += delta
+                        on_chunk(delta)
+                return full
             response = self.client.chat.completions.create(
                 model=self.model,
                 max_tokens=max_tokens,
@@ -86,6 +121,19 @@ class BaseAgent:
             )
             return str(response.choices[0].message.content)
 
+        # Anthropic
+        if on_chunk:
+            full = ""
+            with self.client.messages.stream(
+                model=self.model,
+                max_tokens=max_tokens,
+                system=system_prompt,
+                messages=[{"role": "user", "content": user_message}],
+            ) as stream:
+                for text in stream.text_stream:
+                    full += text
+                    on_chunk(text)
+            return full
         response = self.client.messages.create(
             model=self.model,
             max_tokens=max_tokens,
@@ -132,6 +180,9 @@ class BaseAgent:
             )
             return cached
 
+        # Pick up any streaming callback registered by the SSE thread.
+        on_chunk: Callable[[str], None] | None = getattr(_stream_cb, "fn", None)
+
         for attempt in range(max_retries + 1):
             last_attempt = attempt
             t0 = time.perf_counter()
@@ -140,6 +191,7 @@ class BaseAgent:
                     system_prompt=system_prompt,
                     user_message=user_message,
                     max_tokens=max_tokens,
+                    on_chunk=on_chunk,
                 )
                 duration_ms = (time.perf_counter() - t0) * 1000.0
                 extra: dict[str, Any] = {"attempt": attempt, "model": self.model}

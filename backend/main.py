@@ -7,11 +7,13 @@ from __future__ import annotations
 import asyncio
 import base64
 from contextlib import asynccontextmanager
+from concurrent.futures import ThreadPoolExecutor
 import io
 import json
 import logging
 import os
 import sys
+import threading
 from datetime import datetime, timezone
 from pathlib import Path
 from uuid import uuid4
@@ -23,6 +25,9 @@ from openai import OpenAI
 from fastapi.responses import JSONResponse, StreamingResponse
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel, Field
+from slowapi import Limiter
+from slowapi.errors import RateLimitExceeded
+from slowapi.util import get_remote_address
 
 # Load .env from repo root and backend/
 _ROOT = Path(__file__).resolve().parent.parent
@@ -31,6 +36,30 @@ if str(_ROOT) not in sys.path:
     sys.path.insert(0, str(_ROOT))
 load_dotenv(_ROOT / ".env")
 load_dotenv(_BACKEND / ".env")
+
+from utils.llm_errors import to_dict as _llm_err  # noqa: E402
+
+# ---------------------------------------------------------------------------
+# Concurrency controls
+# ---------------------------------------------------------------------------
+_MAX_PIPELINE_THREADS = int(os.getenv("MAX_PIPELINE_THREADS", "40"))
+_thread_pool = ThreadPoolExecutor(
+    max_workers=_MAX_PIPELINE_THREADS,
+    thread_name_prefix="pipeline",
+)
+
+# Hard cap on simultaneous LLM pipeline runs — prevents provider rate-limit
+# cascade and memory blow-up under high traffic.
+_MAX_CONCURRENT_PIPELINES = int(os.getenv("MAX_CONCURRENT_PIPELINES", "20"))
+_pipeline_sem = threading.Semaphore(_MAX_CONCURRENT_PIPELINES)
+
+# ---------------------------------------------------------------------------
+# Rate limiter — Redis-backed when REDIS_URL is set, in-memory otherwise
+# ---------------------------------------------------------------------------
+limiter = Limiter(
+    key_func=get_remote_address,
+    storage_uri=os.getenv("REDIS_URL") or "memory://",
+)
 
 logging.basicConfig(
     level=logging.INFO,
@@ -77,6 +106,7 @@ app = FastAPI(
     version="1.0.0",
     lifespan=_app_lifespan,
 )
+app.state.limiter = limiter
 
 
 def _parse_allowed_origins() -> tuple[list[str], bool]:
@@ -126,6 +156,19 @@ class ErrorResponse(BaseModel):
     request_id: str | None = None
 
 
+class StartBody(BaseModel):
+    product_idea: str
+    session_id: str | None = None
+
+
+class ResumeBody(BaseModel):
+    thread_id: str
+    product_idea: str
+    questions: list[str]
+    answers: dict[str, str]
+    session_id: str | None = None
+
+
 class UploadDocumentBody(BaseModel):
     filename: str
     content_base64: str
@@ -136,7 +179,7 @@ class AuthModeBody(BaseModel):
     mode: str = Field(pattern="^(none|enforced)$")
 
 class LLMProviderBody(BaseModel):
-    provider: str = Field(pattern="^(anthropic|openrouter|openai|auto)$")
+    provider: str = Field(pattern="^(anthropic|openrouter|openai|gemini|auto)$")
 
 
 def _auth_from_request(request: Request) -> AuthContext | None:
@@ -346,7 +389,7 @@ def get_llm_provider(http_request: Request):
         require_roles(auth, {"admin"})
     return {
         "provider": os.getenv("LLM_PROVIDER", "anthropic").strip().lower() or "anthropic",
-        "allowed_providers": ["anthropic", "openrouter", "openai", "auto"],
+        "allowed_providers": ["anthropic", "openrouter", "openai", "gemini", "auto"],
         "toggle_enabled": _llm_provider_toggle_enabled(),
     }
 
@@ -358,14 +401,33 @@ def set_llm_provider(body: LLMProviderBody, http_request: Request):
     auth = _auth_from_request(http_request)
     if _effective_auth_mode() == "enforced":
         require_roles(auth, {"admin"})
+    global _orchestrator
     os.environ["LLM_PROVIDER"] = body.provider
     get_llm_settings.cache_clear()
+    if _orchestrator is not None:
+        _orchestrator.shutdown_checkpointing()
+        _orchestrator = None
     logger.warning("Runtime LLM provider set to %s", body.provider)
     return {
         "provider": body.provider,
-        "allowed_providers": ["anthropic", "openrouter", "openai", "auto"],
+        "allowed_providers": ["anthropic", "openrouter", "openai", "gemini", "auto"],
         "toggle_enabled": _llm_provider_toggle_enabled(),
     }
+
+
+@app.exception_handler(RateLimitExceeded)
+async def _handle_rate_limit(request: Request, exc: RateLimitExceeded) -> JSONResponse:
+    return JSONResponse(
+        status_code=429,
+        headers={"Retry-After": "60"},
+        content={
+            "error": "rate_limit_exceeded",
+            "title": "Too many requests",
+            "message": str(exc.detail),
+            "action": "Wait a moment and retry.",
+            "retryable": True,
+        },
+    )
 
 
 @app.exception_handler(Exception)
@@ -388,6 +450,7 @@ async def global_exception_handler(request: Request, exc: Exception):
 
 
 @app.post("/api/questions", responses={500: {"model": ErrorResponse}})
+@limiter.limit("20/minute")
 def get_questions(request: ProductIdeaBody, http_request: Request):
     auth = _auth_from_request(http_request)
     require_roles(auth, {"planner:generate", "planner:readwrite"})
@@ -398,13 +461,11 @@ def get_questions(request: ProductIdeaBody, http_request: Request):
         return {"questions": questions}
     except Exception as exc:
         logger.exception("Question generation failed", exc_info=exc)
-        raise HTTPException(
-            status_code=500,
-            detail="Failed to generate clarification questions.",
-        ) from exc
+        raise HTTPException(status_code=500, detail=_llm_err(exc)) from exc
 
 
 @app.post("/api/generate", responses={500: {"model": ErrorResponse}})
+@limiter.limit("3/minute")
 def generate_documentation(request: GenerateBody, http_request: Request):
     auth = _auth_from_request(http_request)
     require_roles(auth, {"planner:generate", "planner:readwrite"})
@@ -426,46 +487,88 @@ def generate_documentation(request: GenerateBody, http_request: Request):
 
 
 @app.post("/api/generate/stream")
+@limiter.limit("3/minute")
 async def generate_stream(request: GenerateBody, http_request: Request):
-    """Stream real per-node workflow progress as server-sent events."""
+    """Stream real per-node workflow progress as server-sent events (legacy path)."""
     auth = _auth_from_request(http_request)
     require_roles(auth, {"planner:generate", "planner:readwrite"})
     owner_id = auth.subject if auth and not auth.is_admin else None
+    orch = get_orchestrator()
+
+    def worker(on_chunk):
+        return orch.run_workflow_streaming(
+            request.product_idea,
+            request.answers,
+            questions=request.questions,
+            session_id=request.session_id,
+            owner_id=owner_id,
+        )
+
+    return _make_sse_stream(worker)
+
+
+def _make_sse_stream(worker_fn):
+    """Wrap a synchronous generator (running in a bounded thread pool) into an async SSE stream.
+
+    Enforces two guards before the work starts:
+    1. _pipeline_sem — hard cap on simultaneous LLM pipeline runs (MAX_CONCURRENT_PIPELINES).
+    2. _thread_pool  — bounded ThreadPoolExecutor (MAX_PIPELINE_THREADS) prevents OS thread explosion.
+    """
+    import queue as _queue
+
+    q: _queue.Queue = _queue.Queue()
+    SENTINEL = object()
+    active_node: list[str] = [""]
+
+    def on_chunk(text: str) -> None:
+        q.put({"type": "token", "stage": active_node[0], "chunk": text})
+
+    def run() -> None:
+        # Non-blocking semaphore acquire — reject immediately when at capacity.
+        if not _pipeline_sem.acquire(blocking=False):
+            q.put({
+                "type": "error",
+                "stage": "error",
+                "status": "failed",
+                "error": {
+                    "code": "server_at_capacity",
+                    "title": "Server at capacity",
+                    "message": (
+                        f"All {_MAX_CONCURRENT_PIPELINES} pipeline slots are busy. "
+                        "Please try again in ~30 seconds."
+                    ),
+                    "action": "Wait 30 seconds and retry.",
+                    "retryable": True,
+                },
+            })
+            q.put(SENTINEL)
+            return
+        try:
+            for node_name, message, node_output in worker_fn(on_chunk):
+                active_node[0] = node_name
+                if node_name == "complete":
+                    q.put({"type": "complete", "stage": "complete", "status": "done", "result": node_output})
+                elif node_name == "interrupt":
+                    q.put({"type": "interrupt", "stage": "interrupt", "status": "waiting", **node_output})
+                else:
+                    artifact = node_output if isinstance(node_output, dict) else {}
+                    q.put({
+                        "type": "stage",
+                        "stage": node_name,
+                        "status": "completed",
+                        "message": message,
+                        "artifact": artifact,
+                    })
+        except Exception as exc:
+            q.put({"type": "error", "stage": "error", "status": "failed", "error": _llm_err(exc)})
+        finally:
+            _pipeline_sem.release()
+            q.put(SENTINEL)
+
+    _thread_pool.submit(run)
 
     async def event_stream():
-        import queue
-        import threading
-
-        q: queue.Queue = queue.Queue()
-        SENTINEL = object()
-
-        def run_in_thread():
-            try:
-                orch = get_orchestrator()
-                for node_name, message, node_output in orch.run_workflow_streaming(
-                    request.product_idea,
-                    request.answers,
-                    questions=request.questions,
-                    session_id=request.session_id,
-                    owner_id=owner_id,
-                ):
-                    if node_name == "complete":
-                        q.put({"stage": "complete", "status": "done", "result": node_output})
-                    else:
-                        q.put({"stage": node_name, "status": "completed", "message": message})
-            except Exception as exc:
-                q.put({
-                    "stage": "error",
-                    "status": "failed",
-                    "error": {"type": type(exc).__name__, "message": str(exc)},
-                })
-            finally:
-                q.put(SENTINEL)
-
-        thread = threading.Thread(target=run_in_thread, daemon=True)
-        thread.start()
-
-        loop = asyncio.get_event_loop()
+        loop = asyncio.get_running_loop()  # get_event_loop() is deprecated in 3.10+
         while True:
             item = await loop.run_in_executor(None, q.get)
             if item is SENTINEL:
@@ -473,6 +576,51 @@ async def generate_stream(request: GenerateBody, http_request: Request):
             yield f"data: {json.dumps(item)}\n\n"
 
     return StreamingResponse(event_stream(), media_type="text/event-stream")
+
+
+@app.post("/api/generate/start")
+@limiter.limit("5/minute")
+async def generate_start(request: StartBody, http_request: Request):
+    """Start the workflow: runs the clarify node then pauses for human input.
+    Emits SSE events including a final ``interrupt`` event with the questions
+    and a ``thread_id`` the client must pass to ``/api/generate/resume``."""
+    auth = _auth_from_request(http_request)
+    require_roles(auth, {"planner:generate", "planner:readwrite"})
+    owner_id = auth.subject if auth and not auth.is_admin else None
+    orch = get_orchestrator()
+
+    def worker(on_chunk):
+        return orch.start_workflow_stream(
+            request.product_idea,
+            session_id=request.session_id,
+            owner_id=owner_id,
+            on_chunk=on_chunk,
+        )
+
+    return _make_sse_stream(worker)
+
+
+@app.post("/api/generate/resume")
+async def generate_resume(request: ResumeBody, http_request: Request):
+    """Resume the workflow after the user has answered clarification questions.
+    Emits SSE events for each remaining node and a final ``complete`` event."""
+    auth = _auth_from_request(http_request)
+    require_roles(auth, {"planner:generate", "planner:readwrite"})
+    owner_id = auth.subject if auth and not auth.is_admin else None
+    orch = get_orchestrator()
+
+    def worker(on_chunk):
+        return orch.resume_workflow_stream(
+            request.thread_id,
+            request.answers,
+            request.questions,
+            session_id=request.session_id,
+            owner_id=owner_id,
+            on_chunk=on_chunk,
+            product_idea=request.product_idea,
+        )
+
+    return _make_sse_stream(worker)
 
 
 @app.post("/api/upload", responses={500: {"model": ErrorResponse}})

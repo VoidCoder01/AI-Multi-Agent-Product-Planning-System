@@ -16,21 +16,18 @@ import { FloatingActions } from "@/components/FloatingActions";
 import { ClarificationThinkingFeed } from "@/components/ClarificationThinkingFeed";
 import { UserContextPanel } from "@/components/UserContextPanel";
 import { WhatsNext } from "@/components/WhatsNext";
+import { AIErrorBanner, type AIErrorDetail } from "@/components/AIErrorBanner";
+import { LiveResultsPanel } from "@/components/LiveResultsPanel";
 
-async function parseError(res: Response): Promise<string> {
+async function parseError(res: Response): Promise<string | AIErrorDetail> {
   try {
     const data = await res.json();
     if (data.detail) {
-      if (typeof data.detail === "string") return data.detail;
-      if (typeof data.detail === "object" && data.detail !== null) {
-        const detail = data.detail as Record<string, unknown>;
-        const stage = typeof detail.stage === "string" ? `${detail.stage}: ` : "";
-        const message =
-          (typeof detail.message === "string" && detail.message) ||
-          (typeof detail.detail === "string" && detail.detail) ||
-          (typeof detail.error === "string" && detail.error);
-        if (message) return `${stage}${message}`;
+      // Structured LLM error from the classifier
+      if (typeof data.detail === "object" && data.detail !== null && "code" in data.detail) {
+        return data.detail as AIErrorDetail;
       }
+      if (typeof data.detail === "string") return data.detail;
       return "Request failed. Please try again.";
     }
   } catch {
@@ -88,6 +85,24 @@ const PIPELINE_TRACE = [
 ] as const;
 
 const PIPELINE_MINI_LABELS = ["Clarifier", "Analyst", "PM", "Architect", "Scrum", "Tasks", "Validate"] as const;
+
+const STAGE_TO_PHASE: Record<string, number> = {
+  clarify: 0,
+  validate_qa: 0,
+  requirement: 1,
+  validate_brief: 1,
+  retry_requirement: 1,
+  pm: 2,
+  validate_prd: 2,
+  retry_pm: 2,
+  architect: 3,
+  validate_architecture: 3,
+  scrum: 4,
+  task: 5,
+  final_validation: 6,
+  evaluate: 6,
+  halt: 6,
+};
 const SHOW_AUTH_TOGGLE = String(import.meta.env.VITE_SHOW_AUTH_TOGGLE || "false").toLowerCase() === "true";
 const SHOW_LLM_PROVIDER_SELECTOR =
   String(import.meta.env.VITE_SHOW_LLM_PROVIDER_SELECTOR || "true").toLowerCase() === "true";
@@ -118,6 +133,10 @@ export default function Index() {
   const [providerToggleEnabled, setProviderToggleEnabled] = useState(false);
   const [authToken, setAuthToken] = useState<string>(() => localStorage.getItem("authToken") || "");
   const [step, setStep] = useState(1);
+  const [threadId, setThreadId] = useState<string | null>(null);
+  const [streamingText, setStreamingText] = useState<string>("");
+  const [currentStage, setCurrentStage] = useState<string>("");
+  const [partialResults, setPartialResults] = useState<Record<string, unknown>>({});
   const [productIdea, setProductIdea] = useState("");
   const [sessionId, setSessionId] = useState<string | null>(null);
   const [uploadedFiles, setUploadedFiles] = useState<{doc_id: string, filename: string}[]>([]);
@@ -127,7 +146,7 @@ export default function Index() {
   const [answers, setAnswers] = useState<Record<string, string>>({});
   const [results, setResults] = useState<Record<string, unknown> | null>(null);
   const [loading, setLoading] = useState(false);
-  const [error, setError] = useState("");
+  const [error, setError] = useState<string | AIErrorDetail>("");
   const [generatePhase, setGeneratePhase] = useState(0);
   const [traceLogs, setTraceLogs] = useState<ExecutionLogEntry[]>([]);
   const [traceRunning, setTraceRunning] = useState<TraceRunningState | null>(null);
@@ -159,9 +178,12 @@ export default function Index() {
       return out;
     }
     if (step === 2 && loading) {
+      // If we're resuming (threadId set), Clarifier already completed — never regress it.
+      const minDone = threadId ? 1 : 0;
+      const effectivePhase = Math.max(generatePhase, minDone);
       for (let i = 0; i < n; i++) {
-        if (i < generatePhase) out[i] = "completed";
-        else if (i === generatePhase) out[i] = "active";
+        if (i < effectivePhase) out[i] = "completed";
+        else if (i === effectivePhase) out[i] = "active";
         else out[i] = "idle";
       }
       return out;
@@ -171,7 +193,7 @@ export default function Index() {
       return out;
     }
     return out;
-  }, [step, loading, generatePhase]);
+  }, [step, loading, generatePhase, threadId]);
 
   const stage: AppStage = useMemo(() => {
     if (step === 3) return "output";
@@ -181,12 +203,17 @@ export default function Index() {
   }, [step, loading]);
 
   const progressPct = useMemo(() => {
+    const TOTAL = 7;
     if (step === 3) return 100;
-    if (step === 2 && loading) return Math.min(95, 38 + generatePhase * 11);
-    if (step === 2) return 42;
-    if (step === 1 && loading) return 22;
+    if (step === 2 && loading) {
+      const minDone = threadId ? 1 : 0;
+      const effective = Math.max(generatePhase, minDone);
+      return Math.min(95, Math.round((effective / TOTAL) * 100) + 8);
+    }
+    if (step === 2) return Math.round((1 / TOTAL) * 100); // clarifier done ≈ 14%
+    if (step === 1 && loading) return 8;
     return 0;
-  }, [step, loading, generatePhase]);
+  }, [step, loading, generatePhase, threadId]);
 
   const completedAgents = useMemo(
     () => pipelineStates.filter((s) => s === "completed").length,
@@ -357,6 +384,7 @@ export default function Index() {
       return;
     }
     setLoading(true);
+    setStreamingText("");
     clarifyStartRef.current = Date.now();
     setTraceRunning({
       agent: "Clarifier",
@@ -364,34 +392,66 @@ export default function Index() {
       inputSummary: truncate(productIdea, 120),
     });
     try {
-      const res = await apiFetch("/api/questions", {
+      const res = await apiFetch("/api/generate/start", {
         method: "POST",
-        body: JSON.stringify({ product_idea: idea }),
+        body: JSON.stringify({ product_idea: idea, session_id: sessionId }),
       });
       if (!res.ok) throw new Error(await parseError(res));
-      const data = await res.json();
-      const qs = data.questions || [];
-      setQuestions(qs);
-      setAnswers({});
-      setStep(2);
-      const ms = Date.now() - clarifyStartRef.current;
-      setTraceRunning(null);
-      appendLog({
-        agent: "Clarifier",
-        message: "Clarification questions ready",
-        status: "completed",
-        durationMs: ms,
-        detail: `${qs.length} question(s) generated.`,
-        inputSummary: truncate(productIdea, 160),
-        outputSummary: `Generated ${qs.length} clarification questions`,
-      });
+      if (!res.body) throw new Error("No response body.");
+
+      const reader = res.body.getReader();
+      const decoder = new TextDecoder();
+      let buffer = "";
+
+      while (true) {
+        const { done, value } = await reader.read();
+        if (done) break;
+        buffer += decoder.decode(value, { stream: true });
+        const lines = buffer.split("\n");
+        buffer = lines.pop() ?? "";
+
+        for (const line of lines) {
+          if (!line.startsWith("data: ")) continue;
+          const raw = line.slice(6).trim();
+          if (!raw) continue;
+          let event: Record<string, unknown>;
+          try { event = JSON.parse(raw); } catch { continue; }
+
+          if (event.type === "token") {
+            setStreamingText((prev) => prev + (event.chunk as string));
+          } else if (event.type === "interrupt") {
+            const qs = (event.questions as string[]) || [];
+            const tid = event.thread_id as string;
+            setThreadId(tid);
+            setQuestions(qs);
+            setAnswers({});
+            setStep(2);
+            setStreamingText("");
+            const ms = Date.now() - clarifyStartRef.current;
+            setTraceRunning(null);
+            appendLog({
+              agent: "Clarifier",
+              message: "Clarification questions ready",
+              status: "completed",
+              durationMs: ms,
+              detail: `${qs.length} question(s) generated.`,
+              inputSummary: truncate(productIdea, 160),
+              outputSummary: `Generated ${qs.length} clarification questions`,
+            });
+          } else if (event.type === "error") {
+            setError((event.error as AIErrorDetail | undefined) ?? "Clarification failed.");
+            setTraceRunning(null);
+            return;
+          }
+        }
+      }
     } catch (e: unknown) {
       setError(e instanceof Error ? e.message : String(e));
       setTraceRunning(null);
     } finally {
       setLoading(false);
     }
-  }, [productIdea, appendLog, apiFetch]);
+  }, [productIdea, sessionId, appendLog, apiFetch]);
 
   const handleGenerate = useCallback(async () => {
     setError("");
@@ -409,31 +469,70 @@ export default function Index() {
       inputSummary: ctx,
     });
     try {
-      const res = await apiFetch("/api/generate", {
-        method: "POST",
-        body: JSON.stringify({ product_idea: productIdea.trim(), answers, questions, session_id: sessionId }),
-      });
+      const body = threadId
+        ? JSON.stringify({ thread_id: threadId, product_idea: productIdea.trim(), questions, answers, session_id: sessionId })
+        : JSON.stringify({ product_idea: productIdea.trim(), answers, questions, session_id: sessionId });
+      const endpoint = threadId ? "/api/generate/resume" : "/api/generate/stream";
+
+      const res = await apiFetch(endpoint, { method: "POST", body });
       if (!res.ok) throw new Error(await parseError(res));
-      const data = await res.json();
-      if (data.error) {
-        const base = String(data.error).trim();
-        const details = Array.isArray(data.validation_errors)
-          ? Array.from(
-              new Set(
-                data.validation_errors
-                  .map((item: unknown) => String(item ?? "").trim())
-                  .filter(Boolean)
-                  .filter((msg: string) => msg !== base),
-              ),
-            )
-          : [];
-        const message = details.length ? `${base} ${details.join("; ")}` : base;
-        setError(message);
-        setTraceRunning(null);
-        return;
+      if (!res.body) throw new Error("No response body from server.");
+
+      const reader = res.body.getReader();
+      const decoder = new TextDecoder();
+      let buffer = "";
+
+      while (true) {
+        const { done, value } = await reader.read();
+        if (done) break;
+        buffer += decoder.decode(value, { stream: true });
+        const lines = buffer.split("\n");
+        buffer = lines.pop() ?? "";
+
+        for (const line of lines) {
+          if (!line.startsWith("data: ")) continue;
+          const raw = line.slice(6).trim();
+          if (!raw) continue;
+          let event: Record<string, unknown>;
+          try { event = JSON.parse(raw); } catch { continue; }
+
+          if (event.type === "token") {
+            setStreamingText((prev) => prev + (event.chunk as string));
+          } else if (event.type === "stage") {
+            // Node completed — save artifact, clear streaming text, advance phase.
+            // Update currentStage here so the live panel header is correct while
+            // the next node's tokens stream in.
+            const stageName = (event.stage ?? event.type) as string;
+            setCurrentStage(stageName);
+            setStreamingText("");
+            const artifact = event.artifact as Record<string, unknown> | undefined;
+            if (artifact && Object.keys(artifact).length > 0) {
+              setPartialResults((prev) => ({ ...prev, ...artifact }));
+            }
+            const phaseIdx = STAGE_TO_PHASE[stageName];
+            if (phaseIdx !== undefined) setGeneratePhase(phaseIdx);
+          } else if (event.type === "complete" && event.result) {
+            setStreamingText("");
+            setCurrentStage("");
+            const data = event.result as Record<string, unknown>;
+            if (data.error) {
+              const base = String(data.error).trim();
+              const details = Array.isArray(data.validation_errors)
+                ? Array.from(new Set((data.validation_errors as unknown[]).map((i) => String(i ?? "").trim()).filter(Boolean).filter((m) => m !== base)))
+                : [];
+              setError(details.length ? `${base} ${details.join("; ")}` : base);
+              setTraceRunning(null);
+              return;
+            }
+            setResults(data);
+            setStep(3);
+          } else if (event.type === "error" || event.stage === "error") {
+            setError((event.error as AIErrorDetail | undefined) ?? "Workflow failed.");
+            setTraceRunning(null);
+            return;
+          }
+        }
       }
-      setResults(data);
-      setStep(3);
     } catch (e: unknown) {
       setError(e instanceof Error ? e.message : String(e));
       setTraceRunning(null);
@@ -479,6 +578,10 @@ export default function Index() {
     setAnswers({});
     setResults(null);
     setSessionId(null);
+    setThreadId(null);
+    setStreamingText("");
+    setCurrentStage("");
+    setPartialResults({});
     setUploadedFiles([]);
     setError("");
     setTraceLogs([]);
@@ -631,17 +734,31 @@ export default function Index() {
             )}
 
             {loading && step === 2 && (
-              <motion.div
-                initial={{ opacity: 0, y: 8 }}
-                animate={{ opacity: 1, y: 0 }}
-                transition={{ duration: 0.35, ease: [0.22, 1, 0.36, 1] }}
-                className="overflow-hidden rounded-2xl border border-white/[0.09] bg-card/38 shadow-[0_12px_40px_-20px_rgba(0,0,0,0.5)] backdrop-blur-xl"
-              >
-                <AgentProgress
-                  onPhaseChange={setGeneratePhase}
-                  paused={pipelinePaused}
-                />
-              </motion.div>
+              <>
+                <motion.div
+                  initial={{ opacity: 0, y: 8 }}
+                  animate={{ opacity: 1, y: 0 }}
+                  transition={{ duration: 0.35, ease: [0.22, 1, 0.36, 1] }}
+                  className="overflow-hidden rounded-2xl border border-white/[0.09] bg-card/38 shadow-[0_12px_40px_-20px_rgba(0,0,0,0.5)] backdrop-blur-xl"
+                >
+                  <AgentProgress
+                    forcedPhaseIndex={generatePhase}
+                    paused={pipelinePaused}
+                  />
+                </motion.div>
+
+                <motion.div
+                  initial={{ opacity: 0, y: 8 }}
+                  animate={{ opacity: 1, y: 0 }}
+                  transition={{ duration: 0.4, ease: [0.22, 1, 0.36, 1] }}
+                >
+                  <LiveResultsPanel
+                    streamingText={streamingText}
+                    currentStage={currentStage}
+                    partialResults={partialResults}
+                  />
+                </motion.div>
+              </>
             )}
 
             <AnimatePresence mode="wait">
@@ -727,11 +844,13 @@ export default function Index() {
                           <Send className="h-4 w-4" />
                           Run clarifier
                         </Button>
-                        {error && (
-                          <p className="text-sm text-destructive">{error}</p>
-                        )}
                       </div>
                     </div>
+                    {error && (
+                      <div className="px-5 pb-4 sm:px-8">
+                        <AIErrorBanner error={error} onDismiss={() => setError("")} onRetry={handleGetQuestions} />
+                      </div>
+                    )}
                   </div>
                 </motion.div>
               )}
@@ -775,9 +894,13 @@ export default function Index() {
                           <ArrowLeft className="h-4 w-4" />
                           Back
                         </Button>
-                        {error && <p className="w-full text-sm text-destructive">{error}</p>}
                       </div>
                     </div>
+                    {error && (
+                      <div className="px-5 pb-4 sm:px-8">
+                        <AIErrorBanner error={error} onDismiss={() => setError("")} onRetry={handleGenerate} />
+                      </div>
+                    )}
                   </div>
                 </motion.div>
               )}
