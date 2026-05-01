@@ -152,9 +152,6 @@ Audio uploads are auto-transcribed with Whisper first, then chunked/indexed like
 - **Session persistence**:
   - `SESSION_STORE_BACKEND=file` (default local JSON files).
   - `SESSION_STORE_BACKEND=postgres` + `DATABASE_URL` for PostgreSQL-backed persistence.
-- **Security/quality gates in CI**:
-  - Python lint/tests + Bandit SAST + `pip-audit`.
-  - Frontend lint/test/build + `npm audit` (high severity threshold).
 
 ---
 
