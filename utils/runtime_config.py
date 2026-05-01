@@ -63,7 +63,7 @@ def get_llm_settings() -> LLMSettings:
     """
     provider = _env_str("LLM_PROVIDER", "anthropic").lower()
     if provider == "anthropic":
-        default_model = _env_str("ANTHROPIC_MODEL", "claude-3-5-sonnet-latest")
+        default_model = _env_str("ANTHROPIC_MODEL", "claude-sonnet-4-6")
     elif provider == "openrouter":
         default_model = _env_str("OPENROUTER_MODEL", "anthropic/claude-3.5-sonnet")
     elif provider == "openai":
@@ -74,7 +74,7 @@ def get_llm_settings() -> LLMSettings:
             "ANTHROPIC_MODEL",
             _env_str(
                 "OPENROUTER_MODEL",
-                _env_str("OPENAI_MODEL", "claude-3-5-sonnet-latest"),
+                _env_str("OPENAI_MODEL", "claude-sonnet-4-6"),
             ),
         )
     return LLMSettings(

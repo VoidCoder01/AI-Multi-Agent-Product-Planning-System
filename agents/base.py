@@ -47,7 +47,7 @@ class BaseAgent:
                 raise ValueError("LLM_PROVIDER=anthropic requires ANTHROPIC_API_KEY")
             self.client = Anthropic(api_key=anthropic_key, timeout=self._llm.timeout_sec)
             if not os.getenv("ANTHROPIC_MODEL"):
-                resolved_model = "claude-3-5-sonnet-latest"
+                resolved_model = "claude-sonnet-4-6"
         elif self.provider == "openrouter":
             if not openrouter_key:
                 raise ValueError("LLM_PROVIDER=openrouter requires OPENROUTER_API_KEY")

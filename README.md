@@ -183,6 +183,7 @@ pytest backend/tests/ -v
 ## Commands
 
 ```bash
+cd frontend/
 npm install
 npm run dev    # http://localhost:8080/ui/ — proxies /api → FastAPI :8000
 npm run build  # dist/ served by FastAPI at http://127.0.0.1:8000/ui/
