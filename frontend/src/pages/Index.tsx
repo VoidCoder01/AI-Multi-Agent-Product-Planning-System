@@ -88,6 +88,9 @@ const PIPELINE_TRACE = [
 ] as const;
 
 const PIPELINE_MINI_LABELS = ["Clarifier", "Analyst", "PM", "Architect", "Scrum", "Tasks", "Validate"] as const;
+const SHOW_AUTH_TOGGLE = String(import.meta.env.VITE_SHOW_AUTH_TOGGLE || "false").toLowerCase() === "true";
+const SHOW_LLM_PROVIDER_SELECTOR =
+  String(import.meta.env.VITE_SHOW_LLM_PROVIDER_SELECTOR || "true").toLowerCase() === "true";
 
 function truncate(s: string, max: number) {
   const t = s.trim();
@@ -105,7 +108,14 @@ const pageTransition = {
 export default function Index() {
   const [backendOnline, setBackendOnline] = useState(true);
   const [authEnabled, setAuthEnabled] = useState(false);
-  const [authToggleEnabled, setAuthToggleEnabled] = useState(false);
+  const [llmProvider, setLlmProvider] = useState("anthropic");
+  const [providerOptions, setProviderOptions] = useState<string[]>([
+    "anthropic",
+    "openrouter",
+    "openai",
+    "auto",
+  ]);
+  const [providerToggleEnabled, setProviderToggleEnabled] = useState(false);
   const [authToken, setAuthToken] = useState<string>(() => localStorage.getItem("authToken") || "");
   const [step, setStep] = useState(1);
   const [productIdea, setProductIdea] = useState("");
@@ -492,10 +502,25 @@ export default function Index() {
         const data = await res.json();
         if (!mounted) return;
         setAuthEnabled(data.mode === "enforced");
-        setAuthToggleEnabled(Boolean(data.toggle_enabled));
+      } catch {
+        return;
+      }
+    };
+
+    const loadLlmProvider = async () => {
+      try {
+        const res = await apiFetch("/api/admin/llm-provider");
+        if (!res.ok) return;
+        const data = await res.json();
+        if (!mounted) return;
+        if (typeof data.provider === "string") setLlmProvider(data.provider);
+        if (Array.isArray(data.allowed_providers) && data.allowed_providers.length > 0) {
+          setProviderOptions(data.allowed_providers.map((item: unknown) => String(item)));
+        }
+        setProviderToggleEnabled(Boolean(data.toggle_enabled));
       } catch {
         if (!mounted) return;
-        setAuthToggleEnabled(false);
+        setProviderToggleEnabled(false);
       }
     };
 
@@ -504,7 +529,10 @@ export default function Index() {
         const res = await fetch("/api/health");
         if (!mounted) return;
         setBackendOnline(res.ok);
-        if (res.ok) await loadAuthMode();
+        if (res.ok) {
+          await loadAuthMode();
+          await loadLlmProvider();
+        }
       } catch {
         if (!mounted) return;
         setBackendOnline(false);
@@ -522,23 +550,24 @@ export default function Index() {
     };
   }, [apiFetch]);
 
-  const handleToggleAuth = useCallback(
-    async (next: boolean) => {
-      if (!authToggleEnabled) return;
+  const handleProviderChange = useCallback(
+    async (next: string) => {
+      if (!providerToggleEnabled) return;
+      if (!providerOptions.includes(next)) return;
       setError("");
       try {
-        const res = await apiFetch("/api/admin/auth-mode", {
+        const res = await apiFetch("/api/admin/llm-provider", {
           method: "POST",
-          body: JSON.stringify({ mode: next ? "enforced" : "none" }),
+          body: JSON.stringify({ provider: next }),
         });
         if (!res.ok) throw new Error(await parseError(res));
         const data = await res.json();
-        setAuthEnabled(data.mode === "enforced");
+        setLlmProvider(String(data.provider || next));
       } catch (e: unknown) {
         setError(e instanceof Error ? e.message : String(e));
       }
     },
-    [apiFetch, authToggleEnabled],
+    [apiFetch, providerOptions, providerToggleEnabled],
   );
 
   useEffect(() => {
@@ -567,9 +596,13 @@ export default function Index() {
       <TerminalHeader
         backendOnline={backendOnline}
         authEnabled={authEnabled}
-        authToggleDisabled={!authToggleEnabled}
-        onToggleAuth={(next) => {
-          void handleToggleAuth(next);
+        showAuthToggle={SHOW_AUTH_TOGGLE}
+        showProviderSelector={SHOW_LLM_PROVIDER_SELECTOR}
+        providerToggleEnabled={providerToggleEnabled}
+        llmProvider={llmProvider}
+        providerOptions={providerOptions}
+        onProviderChange={(next) => {
+          void handleProviderChange(next);
         }}
       />
 

@@ -26,8 +26,11 @@ if TYPE_CHECKING:
     from backend.orchestrator import Orchestrator
 
 
-def compile_planning_graph(orch: Orchestrator):
-    """Build compiled LangGraph with validation gates, retry loops, and evaluation."""
+def compile_planning_graph(orch: Orchestrator, *, checkpointer: object):
+    """Build compiled LangGraph with validation gates, retry loops, and evaluation.
+
+    ``checkpointer`` enables LangGraph persistence at step boundaries (memory, SQLite, or Postgres).
+    """
 
     def _unique_errors(errs: list[str]) -> list[str]:
         seen: set[str] = set()
@@ -380,4 +383,4 @@ def compile_planning_graph(orch: Orchestrator):
     g.add_edge("evaluate", END)
     g.add_edge("halt", END)
 
-    return g.compile()
+    return g.compile(checkpointer=checkpointer)

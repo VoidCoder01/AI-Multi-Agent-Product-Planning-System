@@ -13,7 +13,10 @@ frontend/dist/
 frontend/.vite/
 *.tsbuildinfo
 logs/*.jsonl
-data/planning_memory/
+# Session JSON artifacts (MemoryStore); keep directory placeholder only
+data/planning_memory/*
+!data/planning_memory/.gitkeep
+data/langgraph_checkpoints.sqlite
 .DS_Store
 .cursorrules
 venv/

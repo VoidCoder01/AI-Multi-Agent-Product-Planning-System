@@ -2,7 +2,7 @@
 
 Multi-agent orchestration: a user provides a product idea, the system asks clarifying questions, then **collaborating agents** produce structured artifacts — **project brief**, **PRD**, **epics**, **user stories**, **tasks**, and **subtasks**.
 
-**Stack:** Python 3.11+, **FastAPI**, **OpenAI-compatible SDK** (native OpenAI or OpenRouter), **LangGraph** (graph workflow).
+**Stack:** Python 3.11+, **FastAPI**, **Anthropic/OpenAI/OpenRouter SDK routing**, **LangGraph** (graph workflow).
 
 ---
 
@@ -10,7 +10,7 @@ Multi-agent orchestration: a user provides a product idea, the system asks clari
 
 ```bash
 cp .env.example .env
-# Add OPENAI_API_KEY (or OPENROUTER_API_KEY) to .env
+# Set LLM_PROVIDER and corresponding key in .env (default: Anthropic)
 docker compose up --build
 # API Docs: http://localhost:8000/docs
 ```
@@ -142,7 +142,13 @@ Audio uploads are auto-transcribed with Whisper first, then chunked/indexed like
   - Preferred: JWT bearer tokens via `JWT_SECRET` (`HS256` by default).
   - Legacy fallback: static bearer token via `API_BEARER_TOKEN`.
   - If neither is configured, API auth is disabled for local development.
-  - Optional runtime toggle: set `AUTH_MODE_TOGGLE_ENABLED=true` to allow `/api/admin/auth-mode` switching between `enforced` and `none`.
+  - `AUTH_DISABLED=true` force-disables auth globally regardless of keys/toggles (dev/trusted environments only).
+  - Optional runtime toggle API: set `AUTH_MODE_TOGGLE_ENABLED=true` to allow `/api/admin/auth-mode` switching between `enforced` and `none`.
+  - Frontend toggle control: `VITE_SHOW_AUTH_TOGGLE=false` hides auth mode switch in UI for enterprise deployments.
+- **LLM Provider runtime selection**:
+  - Default provider is set via `LLM_PROVIDER` (`anthropic`, `openrouter`, `openai`, `auto`).
+  - Set `LLM_PROVIDER_TOGGLE_ENABLED=true` to allow runtime switching through `/api/admin/llm-provider`.
+  - Frontend selector visibility is controlled by `VITE_SHOW_LLM_PROVIDER_SELECTOR=true`.
 - **Authorization (RBAC)**:
   - Supported roles/scopes: `planner:read`, `planner:generate`, `planner:readwrite`, `admin`.
   - `admin` can access all sessions; non-admin users are scoped to their own session data.
@@ -165,7 +171,7 @@ pip install -r requirements.txt
 pip install -r requirements-dev.txt
 
 # 2. Run API server
-uvicorn backend.main:app
+uvicorn backend.main:app --reload --host 0.0.0.0 --port 8000
 
 # 3. Run Pytest Suite (tests use mocked OpenAI responses)
 pytest backend/tests/ -v

@@ -4,9 +4,25 @@ from __future__ import annotations
 
 import os
 from dataclasses import dataclass
-from typing import Any
+from typing import Any, Callable
 
 from fastapi import HTTPException, Request
+
+# Set from ``backend.main`` so RBAC respects ``_auth_mode_override`` (dev toggle).
+_auth_enforced_provider: Callable[[], bool] | None = None
+
+
+def set_auth_enforced_provider(fn: Callable[[], bool] | None) -> None:
+    """Register whether API auth + RBAC is active (e.g. ``_effective_auth_mode() == 'enforced'``)."""
+    global _auth_enforced_provider
+    _auth_enforced_provider = fn
+
+
+def auth_is_enforced() -> bool:
+    """True when callers must present credentials and satisfy roles."""
+    if _auth_enforced_provider is not None:
+        return _auth_enforced_provider()
+    return get_configured_auth_mode() != "none"
 
 try:
     import jwt
@@ -114,6 +130,8 @@ def authenticate_request(request: Request) -> AuthContext | None:
 def require_roles(auth: AuthContext | None, required: set[str]) -> None:
     """Raise 403 if the auth context does not satisfy required roles."""
     if not required:
+        return
+    if not auth_is_enforced():
         return
     if auth is None:
         raise HTTPException(status_code=401, detail="Authentication is required.")

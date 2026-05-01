@@ -20,7 +20,16 @@ def _mock_openai_response(text: str) -> MagicMock:
 
 @pytest.fixture
 def client():
-    with patch.dict(os.environ, {"OPENAI_API_KEY": "test-key"}, clear=False):
+    with patch.dict(
+        os.environ,
+        {
+            "LLM_PROVIDER": "openai",
+            "OPENAI_API_KEY": "test-key",
+            "JWT_SECRET": "",
+            "API_BEARER_TOKEN": "",
+        },
+        clear=False,
+    ):
         with patch("agents.base.OpenAI") as mock_cls, patch("backend.main.OpenAI") as api_openai_cls:
             mock_client = MagicMock()
             mock_cls.return_value = mock_client

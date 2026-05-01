@@ -1,19 +1,26 @@
 import { motion } from "framer-motion";
 import { Layers, Radio } from "lucide-react";
-import { Switch } from "@/components/ui/switch";
 
 type TerminalHeaderProps = {
   backendOnline: boolean;
   authEnabled: boolean;
-  authToggleDisabled?: boolean;
-  onToggleAuth: (next: boolean) => void;
+  showAuthToggle?: boolean;
+  showProviderSelector?: boolean;
+  providerToggleEnabled?: boolean;
+  llmProvider?: string;
+  providerOptions?: string[];
+  onProviderChange?: (next: string) => void;
 };
 
 export function TerminalHeader({
   backendOnline,
   authEnabled,
-  authToggleDisabled = false,
-  onToggleAuth,
+  showAuthToggle = false,
+  showProviderSelector = false,
+  providerToggleEnabled = false,
+  llmProvider = "anthropic",
+  providerOptions = ["anthropic", "openrouter", "openai", "auto"],
+  onProviderChange,
 }: TerminalHeaderProps) {
   return (
     <motion.header
@@ -37,20 +44,36 @@ export function TerminalHeader({
           </div>
         </div>
         <div className="flex items-center gap-3 sm:gap-5">
-          <div className="hidden items-center gap-2 rounded-full border border-white/[0.08] bg-white/[0.04] px-3 py-1.5 sm:flex">
-            <span className="text-[11px] font-medium uppercase tracking-[0.12em] text-muted-foreground">
-              auth
-            </span>
-            <Switch
-              checked={authEnabled}
-              disabled={authToggleDisabled}
-              onCheckedChange={onToggleAuth}
-              aria-label="Toggle authentication mode"
-            />
-            <span className="text-[11px] font-medium uppercase tracking-[0.12em] text-muted-foreground">
-              {authEnabled ? "enabled" : "disabled"}
-            </span>
-          </div>
+          {showAuthToggle && (
+            <div className="hidden items-center gap-2 rounded-full border border-white/[0.08] bg-white/[0.04] px-3 py-1.5 sm:flex">
+              <span className="text-[11px] font-medium uppercase tracking-[0.12em] text-muted-foreground">
+                auth
+              </span>
+              <span className="text-[11px] font-medium uppercase tracking-[0.12em] text-muted-foreground">
+                {authEnabled ? "enabled" : "disabled"}
+              </span>
+            </div>
+          )}
+          {showProviderSelector && (
+            <div className="hidden items-center gap-2 rounded-full border border-white/[0.08] bg-white/[0.04] px-3 py-1.5 sm:flex">
+              <span className="text-[11px] font-medium uppercase tracking-[0.12em] text-muted-foreground">
+                llm
+              </span>
+              <select
+                value={llmProvider}
+                disabled={!providerToggleEnabled}
+                onChange={(e) => onProviderChange?.(e.target.value)}
+                className="h-7 rounded-md border border-white/[0.12] bg-black/25 px-2 text-[11px] uppercase tracking-[0.1em] text-[#E5E7EB] outline-none disabled:opacity-60"
+                aria-label="Select runtime LLM provider"
+              >
+                {providerOptions.map((provider) => (
+                  <option key={provider} value={provider} className="bg-[#111827] text-[#E5E7EB]">
+                    {provider}
+                  </option>
+                ))}
+              </select>
+            </div>
+          )}
           <div className="hidden items-center gap-2 rounded-full border border-white/[0.08] bg-white/[0.04] px-3 py-1.5 sm:flex">
             <Radio className={`h-3.5 w-3.5 ${backendOnline ? "text-emerald-400" : "text-rose-400"}`} />
             <span className="text-[11px] font-medium uppercase tracking-[0.12em] text-muted-foreground">

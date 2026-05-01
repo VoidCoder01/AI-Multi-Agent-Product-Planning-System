@@ -42,6 +42,7 @@ def _env_float(name: str, default: float, *, min_value: float = 0.0) -> float:
 class LLMSettings:
     """OpenAI-compatible LLM client + retry behavior."""
 
+    provider: str
     model: str
     max_retries: int
     retry_backoff_base_sec: float
@@ -60,14 +61,25 @@ def get_llm_settings() -> LLMSettings:
     """
     max_retries: extra attempts after the first failure (total calls = max_retries + 1).
     """
-    return LLMSettings(
-        model=_env_str(
-            "OPENAI_MODEL",
+    provider = _env_str("LLM_PROVIDER", "anthropic").lower()
+    if provider == "anthropic":
+        default_model = _env_str("ANTHROPIC_MODEL", "claude-3-5-sonnet-latest")
+    elif provider == "openrouter":
+        default_model = _env_str("OPENROUTER_MODEL", "anthropic/claude-3.5-sonnet")
+    elif provider == "openai":
+        default_model = _env_str("OPENAI_MODEL", "gpt-4o-mini")
+    else:
+        # auto mode keeps backward compatibility while preferring Claude-family defaults.
+        default_model = _env_str(
+            "ANTHROPIC_MODEL",
             _env_str(
                 "OPENROUTER_MODEL",
-                _env_str("ANTHROPIC_MODEL", "gpt-4o-mini"),
+                _env_str("OPENAI_MODEL", "claude-3-5-sonnet-latest"),
             ),
-        ),
+        )
+    return LLMSettings(
+        provider=provider,
+        model=default_model,
         max_retries=max(0, _env_int("LLM_MAX_RETRIES", 2, min_value=0)),
         retry_backoff_base_sec=_env_float(
             "LLM_RETRY_BACKOFF_BASE_SEC", 0.6, min_value=0.0

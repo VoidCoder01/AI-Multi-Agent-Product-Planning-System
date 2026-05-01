@@ -139,7 +139,7 @@ MOCK_EVAL = {
 }
 
 
-@patch.dict(os.environ, {"OPENAI_API_KEY": "test-key"})
+@patch.dict(os.environ, {"LLM_PROVIDER": "openai", "OPENAI_API_KEY": "test-key"})
 @patch("agents.base.OpenAI")
 def test_full_graph_pipeline(mock_cls):
     """End-to-end graph execution with mocked LLM responses."""

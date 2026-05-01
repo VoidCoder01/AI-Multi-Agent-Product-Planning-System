@@ -6,6 +6,7 @@ import json
 import logging
 from datetime import datetime, timezone
 from pathlib import Path
+from uuid import uuid4
 
 from agents import (
     ArchitectAgent,
@@ -15,6 +16,7 @@ from agents import (
     ScrumAgent,
     TaskAgent,
 )
+from orchestrator.checkpointing import create_planning_checkpointer
 from orchestrator.graph import compile_planning_graph
 from utils.memory_store import SessionStore, create_session_store
 from utils.reranker import LexicalOverlapReranker
@@ -39,7 +41,19 @@ class Orchestrator:
         self._memory: SessionStore = create_session_store()
         self._retriever = VectorRetriever(top_k=6)
         self._reranker = LexicalOverlapReranker()
-        self._graph = compile_planning_graph(self)
+        self._checkpointer, self._checkpoint_shutdown = create_planning_checkpointer()
+        self._graph = compile_planning_graph(self, checkpointer=self._checkpointer)
+
+    def shutdown_checkpointing(self) -> None:
+        """Release DB connections used by the LangGraph checkpointer (e.g. Postgres)."""
+        if self._checkpoint_shutdown is not None:
+            self._checkpoint_shutdown()
+            self._checkpoint_shutdown = None
+
+    @staticmethod
+    def _run_config(thread_id: str) -> dict:
+        """RunnableConfig for LangGraph: one checkpoint thread per pipeline run."""
+        return {"configurable": {"thread_id": thread_id}}
 
     def mermaid_diagram(self) -> str:
         """LangGraph structure as Mermaid (for documentation / debugging)."""
@@ -58,22 +72,29 @@ class Orchestrator:
         Run the LangGraph pipeline. Pass the same `questions` as /api/questions
         so answers align with prompts (q1, q2, …).
         """
+        thread_id = str(uuid4())
         initial: dict = {
             "product_idea": product_idea,
             "user_answers": user_answers,
             "questions": questions,
             "user_input": product_idea,
             "session_id": session_id,
+            "owner_id": owner_id,
             "clarify_round": 0,
             "max_clarify_rounds": 2,
         }
-        logger.info("Starting planning graph for idea length=%s", len(product_idea))
-        final = self._graph.invoke(initial)
+        logger.info(
+            "Starting planning graph for idea length=%s thread_id=%s",
+            len(product_idea),
+            thread_id,
+        )
+        final = self._graph.invoke(initial, config=self._run_config(thread_id))
         return self._finalize_result(
             product_idea,
             final,
             session_id=session_id,
             owner_id=owner_id,
+            langgraph_thread_id=thread_id,
         )
 
     def _finalize_result(
@@ -83,6 +104,7 @@ class Orchestrator:
         *,
         session_id: str | None = None,
         owner_id: str | None = None,
+        langgraph_thread_id: str | None = None,
     ) -> dict:
         """Persist final graph state and shape consistent API response payload."""
         err = final.get("pipeline_error") or final.get("halt_reason")
@@ -107,6 +129,7 @@ class Orchestrator:
 
         return {
             "session_id": sid,
+            "langgraph_thread_id": langgraph_thread_id,
             "questions": final.get("questions") or [],
             "project_brief": final.get("project_brief") or {},
             "pm_brief_review": final.get("pm_brief_review") or {},
@@ -173,6 +196,7 @@ class Orchestrator:
             "retry_pm": "Retrying PRD generation…",
             "halt": "Pipeline halted — validation failed.",
         }
+        thread_id = str(uuid4())
         initial: dict = {
             "product_idea": product_idea,
             "user_answers": user_answers,
@@ -184,7 +208,8 @@ class Orchestrator:
             "max_clarify_rounds": 2,
         }
         final_state = dict(initial)
-        for event in self._graph.stream(initial, stream_mode="updates"):
+        run_cfg = self._run_config(thread_id)
+        for event in self._graph.stream(initial, config=run_cfg, stream_mode="updates"):
             for node_name, node_output in event.items():
                 if isinstance(node_output, dict):
                     final_state.update(node_output)
@@ -198,6 +223,7 @@ class Orchestrator:
                 final_state,
                 session_id=session_id,
                 owner_id=owner_id,
+                langgraph_thread_id=thread_id,
             ),
         )
 

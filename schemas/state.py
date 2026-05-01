@@ -32,4 +32,5 @@ class PlanningState(TypedDict, total=False):
     needs_retry_clarify: bool
     halt_reason: str | None
     session_id: str | None
+    owner_id: str | None
     rag_context: list[dict]

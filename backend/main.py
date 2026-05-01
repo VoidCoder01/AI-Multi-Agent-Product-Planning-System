@@ -6,6 +6,7 @@ from __future__ import annotations
 
 import asyncio
 import base64
+from contextlib import asynccontextmanager
 import io
 import json
 import logging
@@ -43,10 +44,12 @@ from backend.security import (
     authenticate_request,
     get_configured_auth_mode,
     require_roles,
+    set_auth_enforced_provider,
 )
 from schemas.models import GenerateBody, ProductIdeaBody
 from utils.chunking import chunk_text
 from utils.embeddings import build_vector_index
+from utils.runtime_config import get_llm_settings
 
 _orchestrator: Orchestrator | None = None
 _auth_mode_override: str | None = None
@@ -59,10 +62,20 @@ def get_orchestrator() -> Orchestrator:
     return _orchestrator
 
 
+@asynccontextmanager
+async def _app_lifespan(_app: FastAPI):
+    yield
+    global _orchestrator
+    if _orchestrator is not None:
+        _orchestrator.shutdown_checkpointing()
+        _orchestrator = None
+
+
 app = FastAPI(
     title="AI Multi-Agent Product Planning API",
     description="Brief → PRD → epics/stories → tasks.",
     version="1.0.0",
+    lifespan=_app_lifespan,
 )
 
 
@@ -122,6 +135,9 @@ class UploadDocumentBody(BaseModel):
 class AuthModeBody(BaseModel):
     mode: str = Field(pattern="^(none|enforced)$")
 
+class LLMProviderBody(BaseModel):
+    provider: str = Field(pattern="^(anthropic|openrouter|openai|auto)$")
+
 
 def _auth_from_request(request: Request) -> AuthContext | None:
     auth = getattr(request.state, "auth", None)
@@ -139,13 +155,38 @@ def _auth_toggle_enabled() -> bool:
     }
 
 
+def _llm_provider_toggle_enabled() -> bool:
+    """Enable runtime LLM provider switching via admin endpoint."""
+    return os.getenv("LLM_PROVIDER_TOGGLE_ENABLED", "false").strip().lower() in {
+        "1",
+        "true",
+        "yes",
+        "on",
+    }
+
+
+def _auth_disabled() -> bool:
+    """Global auth kill switch for trusted local/dev scenarios."""
+    return os.getenv("AUTH_DISABLED", "false").strip().lower() in {
+        "1",
+        "true",
+        "yes",
+        "on",
+    }
+
+
 def _effective_auth_mode() -> str:
+    if _auth_disabled():
+        return "none"
     if _auth_mode_override in {"none", "enforced"}:
         return _auth_mode_override
     configured = get_configured_auth_mode()
     if configured == "none":
         return "none"
     return "enforced"
+
+
+set_auth_enforced_provider(lambda: _effective_auth_mode() == "enforced")
 
 
 def _extract_text_from_pdf(content: bytes) -> str:
@@ -268,12 +309,18 @@ def get_auth_mode(http_request: Request):
     return {
         "mode": _effective_auth_mode(),
         "configured_mode": get_configured_auth_mode(),
+        "auth_disabled": _auth_disabled(),
         "toggle_enabled": _auth_toggle_enabled(),
     }
 
 
 @app.post("/api/admin/auth-mode")
 def set_auth_mode(body: AuthModeBody, http_request: Request):
+    if _auth_disabled():
+        raise HTTPException(
+            status_code=403,
+            detail="Auth mode override is blocked while AUTH_DISABLED=true.",
+        )
     if not _auth_toggle_enabled():
         raise HTTPException(status_code=403, detail="Auth mode toggle is disabled.")
 
@@ -287,7 +334,37 @@ def set_auth_mode(body: AuthModeBody, http_request: Request):
     return {
         "mode": _effective_auth_mode(),
         "configured_mode": get_configured_auth_mode(),
+        "auth_disabled": _auth_disabled(),
         "toggle_enabled": _auth_toggle_enabled(),
+    }
+
+
+@app.get("/api/admin/llm-provider")
+def get_llm_provider(http_request: Request):
+    auth = _auth_from_request(http_request)
+    if _effective_auth_mode() == "enforced":
+        require_roles(auth, {"admin"})
+    return {
+        "provider": os.getenv("LLM_PROVIDER", "anthropic").strip().lower() or "anthropic",
+        "allowed_providers": ["anthropic", "openrouter", "openai", "auto"],
+        "toggle_enabled": _llm_provider_toggle_enabled(),
+    }
+
+
+@app.post("/api/admin/llm-provider")
+def set_llm_provider(body: LLMProviderBody, http_request: Request):
+    if not _llm_provider_toggle_enabled():
+        raise HTTPException(status_code=403, detail="LLM provider toggle is disabled.")
+    auth = _auth_from_request(http_request)
+    if _effective_auth_mode() == "enforced":
+        require_roles(auth, {"admin"})
+    os.environ["LLM_PROVIDER"] = body.provider
+    get_llm_settings.cache_clear()
+    logger.warning("Runtime LLM provider set to %s", body.provider)
+    return {
+        "provider": body.provider,
+        "allowed_providers": ["anthropic", "openrouter", "openai", "auto"],
+        "toggle_enabled": _llm_provider_toggle_enabled(),
     }
 
 

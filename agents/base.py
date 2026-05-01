@@ -1,4 +1,4 @@
-"""OpenRouter/OpenAI client + audit logging for all agents."""
+"""Provider-aware LLM client + audit logging for all agents."""
 
 from __future__ import annotations
 
@@ -7,6 +7,7 @@ import os
 import time
 from typing import Any
 
+from anthropic import Anthropic
 from openai import OpenAI
 
 from utils.agent_logger import log_agent_execution
@@ -17,41 +18,84 @@ logger = logging.getLogger(__name__)
 
 
 class BaseAgent:
-    """Shared OpenAI-compatible client; subclasses set `audit_name`."""
+    """Shared provider client; subclasses set `audit_name`."""
 
     audit_name: str = "BASE_AGENT"
     _cache = CacheLayer()  # shared across agents
 
     def __init__(self) -> None:
+        anthropic_key = os.getenv("ANTHROPIC_API_KEY") or os.getenv("anthropic_api_key")
         openai_key = os.getenv("OPENAI_API_KEY") or os.getenv("openai_api_key")
         openrouter_key = os.getenv("OPENROUTER_API_KEY") or os.getenv("open_router_api_key")
-        key = openai_key or openrouter_key
-        if not key:
-            raise ValueError("Set OPENAI_API_KEY or OPENROUTER_API_KEY")
+        # Tests patch env vars per test; clear cached settings so provider/model follow current env.
+        get_llm_settings.cache_clear()
         self._llm = get_llm_settings()
+        provider = self._llm.provider
+        if provider == "auto":
+            if anthropic_key:
+                provider = "anthropic"
+            elif openrouter_key:
+                provider = "openrouter"
+            elif openai_key:
+                provider = "openai"
+            else:
+                provider = "anthropic"
+        self.provider = provider
         resolved_model = self._llm.model
-        kwargs: dict[str, Any] = {
-            "api_key": key,
-            "timeout": self._llm.timeout_sec,
-        }
-        # Route via OpenRouter only when OpenRouter key is used.
-        if openrouter_key and not openai_key:
-            kwargs["base_url"] = "https://openrouter.ai/api/v1"
-        elif (
-            openai_key
-            and not os.getenv("OPENAI_MODEL")
-            and ("/" in resolved_model or ":" in resolved_model)
-        ):
-            # Guardrail: OpenRouter slugs are invalid on native OpenAI endpoints.
-            resolved_model = "gpt-4o-mini"
-            logger.warning(
-                "OPENAI_API_KEY detected with non-OpenAI model slug '%s'; "
-                "falling back to '%s'. Set OPENAI_MODEL to override.",
-                self._llm.model,
-                resolved_model,
+        if self.provider == "anthropic":
+            if not anthropic_key:
+                raise ValueError("LLM_PROVIDER=anthropic requires ANTHROPIC_API_KEY")
+            self.client = Anthropic(api_key=anthropic_key, timeout=self._llm.timeout_sec)
+            if not os.getenv("ANTHROPIC_MODEL"):
+                resolved_model = "claude-3-5-sonnet-latest"
+        elif self.provider == "openrouter":
+            if not openrouter_key:
+                raise ValueError("LLM_PROVIDER=openrouter requires OPENROUTER_API_KEY")
+            self.client = OpenAI(
+                api_key=openrouter_key,
+                base_url="https://openrouter.ai/api/v1",
+                timeout=self._llm.timeout_sec,
             )
-        self.client = OpenAI(**kwargs)
+        elif self.provider == "openai":
+            if not openai_key:
+                raise ValueError("LLM_PROVIDER=openai requires OPENAI_API_KEY")
+            if not os.getenv("OPENAI_MODEL") and ("/" in resolved_model or ":" in resolved_model):
+                raise ValueError(
+                    "OPENAI_MODEL must be a native OpenAI model when LLM_PROVIDER=openai."
+                )
+            self.client = OpenAI(api_key=openai_key, timeout=self._llm.timeout_sec)
+        else:
+            raise ValueError("LLM_PROVIDER must be one of: anthropic, openrouter, openai, auto")
         self.model = resolved_model
+
+    def _create_completion(
+        self,
+        *,
+        system_prompt: str,
+        user_message: str,
+        max_tokens: int,
+    ) -> str:
+        if self.provider in {"openai", "openrouter"}:
+            response = self.client.chat.completions.create(
+                model=self.model,
+                max_tokens=max_tokens,
+                messages=[
+                    {"role": "system", "content": system_prompt},
+                    {"role": "user", "content": user_message},
+                ],
+            )
+            return str(response.choices[0].message.content)
+
+        response = self.client.messages.create(
+            model=self.model,
+            max_tokens=max_tokens,
+            system=system_prompt,
+            messages=[{"role": "user", "content": user_message}],
+        )
+        text_parts = [
+            block.text for block in response.content if getattr(block, "type", "") == "text"
+        ]
+        return "\n".join(text_parts).strip()
 
     def call_llm(
         self,
@@ -92,15 +136,11 @@ class BaseAgent:
             last_attempt = attempt
             t0 = time.perf_counter()
             try:
-                response = self.client.chat.completions.create(
-                    model=self.model,
+                text = self._create_completion(
+                    system_prompt=system_prompt,
+                    user_message=user_message,
                     max_tokens=max_tokens,
-                    messages=[
-                        {"role": "system", "content": system_prompt},
-                        {"role": "user", "content": user_message}
-                    ],
                 )
-                text = str(response.choices[0].message.content)
                 duration_ms = (time.perf_counter() - t0) * 1000.0
                 extra: dict[str, Any] = {"attempt": attempt, "model": self.model}
                 if prompt_audit:
